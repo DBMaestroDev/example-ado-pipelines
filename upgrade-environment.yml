@@ -1,0 +1,81 @@
+﻿# Example: Upgrade Environment
+# Upgrades a DBmaestro environment triggered by push, pull request, or manual dispatch.
+# A concurrency group prevents simultaneous upgrades to the same environment.
+
+name: Example - Upgrade Environment (Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'Package name(s) to upgrade (comma-separated)'
+        required: false
+        type: string
+      tag_name:
+        description: 'Tag name to upgrade (use instead of package_name)'
+        required: false
+        type: string
+      target_environment:
+        description: 'Target environment for upgrade'
+        required: true
+        type: choice
+        options:
+          - 'integration'
+          - 'production'
+      project_name:
+        description: 'DBmaestro project name'
+        required: false
+        type: string
+        default: 'paradigm'
+  push:
+    branches:
+      - Release_Source
+      - Prod_Env_1
+      - QA_Env_1
+      - Prod_Env_3
+  pull_request:
+    branches:
+      - Prod_Env_1
+      - QA_Env_1
+      - Prod_Env_3
+
+# Prevent concurrent upgrades to the same environment/project combination
+concurrency:
+  group: upgrade-${{ github.event_name == 'workflow_dispatch' && inputs.project_name || 'Demo-PSQL' }}-${{ github.event_name == 'workflow_dispatch' && inputs.target_environment || github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  upgrade_on_dispatch_or_push:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    uses: DBMaestroDev/dbmaestro-cicd/.github/workflows/sh-upgrade-environment.yml@v1
+    with:
+      package_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.package_name || '' }}
+      tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || '' }}
+      target_environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || github.ref_name }}
+      project_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project_name || 'Demo-PSQL' }}
+      cli_version: ${{ vars.CLI_VERSION }}  # set CLI_VERSION repo variable; leave empty if JAR is pre-installed
+      agent_jar_path: '/home/runner/DBmaestroAgent.jar'
+      detect_from_push: ${{ github.event_name == 'push' }}
+      is_pull_request: false
+      use_ssl: 'True'
+      runner: 'dbmaestro-linux'
+      dbmaestro_server: ${{ vars.DBMAESTRO_SERVER }}
+      dbmaestro_user: ${{ vars.DBMAESTRO_USER }}
+    secrets:
+      DBMAESTRO_PASSWORD: ${{ secrets.DBMAESTRO_PASSWORD }}
+
+  upgrade_on_pr:
+    if: github.event_name == 'pull_request'
+    uses: DBMaestroDev/dbmaestro-cicd/.github/workflows/sh-upgrade-environment.yml@v1
+    with:
+      target_environment: ${{ github.base_ref }}
+      project_name: 'Demo-PSQL'
+      cli_version: ${{ vars.CLI_VERSION }}  # set CLI_VERSION repo variable; leave empty if JAR is pre-installed
+      agent_jar_path: '/home/runner/DBmaestroAgent.jar'
+      is_pull_request: true
+      use_ssl: 'True'
+      runner: 'dbmaestro-linux'
+      dbmaestro_server: ${{ vars.DBMAESTRO_SERVER }}
+      dbmaestro_user: ${{ vars.DBMAESTRO_USER }}
+    secrets:
+      DBMAESTRO_PASSWORD: ${{ secrets.DBMAESTRO_PASSWORD }}
