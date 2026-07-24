@@ -1,4 +1,4 @@
-﻿# Example: Build from Source Control (Tasks or Specific Commit)
+# Example: Build from Source Control (Tasks or Specific Commit)
 # Builds a DBmaestro package from source control by task list or commit hash.
 # Use "All Changes" to include everything since the last build.
 
