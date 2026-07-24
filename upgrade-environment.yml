@@ -1,4 +1,4 @@
-﻿# Example: Upgrade Environment (Azure DevOps)
+# Example: Upgrade Environment (Azure DevOps)
 # Upgrades a DBmaestro environment on push, pull request, or manual trigger.
 # lockBehavior: sequential prevents concurrent upgrades to the same environment.
 
