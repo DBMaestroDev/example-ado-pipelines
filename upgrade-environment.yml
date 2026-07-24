@@ -35,7 +35,7 @@ parameters:
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'ado-linux-agent'
+    default: 'NicolasHosted'
 # Auto-trigger on pushes to tracked environment branches
 trigger:
   branches:

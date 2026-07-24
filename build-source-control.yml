@@ -56,7 +56,7 @@ parameters:
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'ado-linux-agent'
+    default: 'NicolasHosted'
 trigger: none
 pr: none
 
