@@ -1,81 +1,104 @@
-﻿# Example: Upgrade Environment
-# Upgrades a DBmaestro environment triggered by push, pull request, or manual dispatch.
-# A concurrency group prevents simultaneous upgrades to the same environment.
+﻿# Example: Upgrade Environment (Azure DevOps)
+# Upgrades a DBmaestro environment on push, pull request, or manual trigger.
+# lockBehavior: sequential prevents concurrent upgrades to the same environment.
 
-name: Example - Upgrade Environment (Linux)
+resources:
+  repositories:
+    - repository: dbmaestro-cicd
+      type: github
+      name: DBMaestroDev/dbmaestro-cicd
+      endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
+      ref: refs/tags/v1
 
-on:
-  workflow_dispatch:
-    inputs:
-      package_name:
-        description: 'Package name(s) to upgrade (comma-separated)'
-        required: false
-        type: string
-      tag_name:
-        description: 'Tag name to upgrade (use instead of package_name)'
-        required: false
-        type: string
-      target_environment:
-        description: 'Target environment for upgrade'
-        required: true
-        type: choice
-        options:
-          - 'integration'
-          - 'production'
-      project_name:
-        description: 'DBmaestro project name'
-        required: false
-        type: string
-        default: 'paradigm'
-  push:
-    branches:
-      - Release_Source
-      - Prod_Env_1
+parameters:
+  - name: targetEnvironment
+    displayName: 'Target environment for upgrade (manual runs)'
+    type: string
+    default: 'integration'
+    values:
+      - 'integration'
+      - 'qa'
+      - 'production'
+  - name: packageNames
+    displayName: 'Package names to upgrade (comma-separated, leave empty to auto-detect)'
+    type: string
+    default: ''
+  - name: tagName
+    displayName: 'Tag name to upgrade (use instead of packageNames)'
+    type: string
+    default: ''
+  - name: projectName
+    type: string
+    default: 'paradigm'
+  - name: agentJarPath
+    type: string
+    default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
+  - name: runnerPool
+    type: string
+    default: 'ado-linux-agent'
+# Auto-trigger on pushes to tracked environment branches
+trigger:
+  branches:
+    include:
+      - integration
+      - qa
+      - production
+
+# Run validating upgrade on pull requests targeting environment branches
+pr:
+  branches:
+    include:
       - QA_Env_1
-      - Prod_Env_3
-  pull_request:
-    branches:
       - Prod_Env_1
-      - QA_Env_1
       - Prod_Env_3
 
-# Prevent concurrent upgrades to the same environment/project combination
-concurrency:
-  group: upgrade-${{ github.event_name == 'workflow_dispatch' && inputs.project_name || 'Demo-PSQL' }}-${{ github.event_name == 'workflow_dispatch' && inputs.target_environment || github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
-  cancel-in-progress: false
+stages:
+  - stage: Upgrade
+    displayName: 'Upgrade Environment'
+    # lockBehavior: sequential ensures upgrades to the same branch are serialized
+    lockBehavior: sequential
+    jobs:
+      - job: UpgradeEnvironment
+        displayName: 'Upgrade DBmaestro Environment'
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - checkout: self
+            fetchDepth: 1
 
-jobs:
-  upgrade_on_dispatch_or_push:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-    uses: DBMaestroDev/dbmaestro-cicd/.github/workflows/sh-upgrade-environment.yml@v1
-    with:
-      package_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.package_name || '' }}
-      tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || '' }}
-      target_environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_environment || github.ref_name }}
-      project_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project_name || 'Demo-PSQL' }}
-      cli_version: ${{ vars.CLI_VERSION }}  # set CLI_VERSION repo variable; leave empty if JAR is pre-installed
-      agent_jar_path: '/home/runner/DBmaestroAgent.jar'
-      detect_from_push: ${{ github.event_name == 'push' }}
-      is_pull_request: false
-      use_ssl: 'True'
-      runner: 'dbmaestro-linux'
-      dbmaestro_server: ${{ vars.DBMAESTRO_SERVER }}
-      dbmaestro_user: ${{ vars.DBMAESTRO_USER }}
-    secrets:
-      DBMAESTRO_PASSWORD: ${{ secrets.DBMAESTRO_PASSWORD }}
+          - checkout: dbmaestro-cicd
+            fetchDepth: 1
 
-  upgrade_on_pr:
-    if: github.event_name == 'pull_request'
-    uses: DBMaestroDev/dbmaestro-cicd/.github/workflows/sh-upgrade-environment.yml@v1
-    with:
-      target_environment: ${{ github.base_ref }}
-      project_name: 'Demo-PSQL'
-      cli_version: ${{ vars.CLI_VERSION }}  # set CLI_VERSION repo variable; leave empty if JAR is pre-installed
-      agent_jar_path: '/home/runner/DBmaestroAgent.jar'
-      is_pull_request: true
-      use_ssl: 'True'
-      runner: 'dbmaestro-linux'
-      dbmaestro_server: ${{ vars.DBMAESTRO_SERVER }}
-      dbmaestro_user: ${{ vars.DBMAESTRO_USER }}
-    secrets:
-      DBMAESTRO_PASSWORD: ${{ secrets.DBMAESTRO_PASSWORD }}
+          - bash: |
+              # Determine the target environment and whether this is a PR
+              if [ -n "$SYSTEM_PULLREQUEST_TARGETBRANCH" ]; then
+                TARGET="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+                IS_PR="true"
+              elif [ "$(Build.Reason)" = "Manual" ]; then
+                TARGET="${{ parameters.targetEnvironment }}"
+                IS_PR="false"
+              else
+                TARGET="$(Build.SourceBranchName)"
+                IS_PR="false"
+              fi
+              echo "Target environment: $TARGET"
+              echo "Is pull request: $IS_PR"
+              echo "##vso[task.setvariable variable=resolvedTarget]$TARGET"
+              echo "##vso[task.setvariable variable=resolvedIsPr]$IS_PR"
+            displayName: 'Resolve Target Environment'
+
+          - template: azure-devops/templates/upgrade-environment.yml@dbmaestro-cicd
+            parameters:
+              packageName: ${{ parameters.packageNames }}
+              tagName: ${{ parameters.tagName }}
+              projectName: ${{ parameters.projectName }}
+              targetEnvironment: $(resolvedTarget)
+              agentJarPath: ${{ parameters.agentJarPath }}
+              server: $(DBMAESTRO_SERVER)
+              user: $(DBMAESTRO_USER)
+              password: $(DBMAESTRO_PASSWORD)
+              useSsl: 'True'
+              authType: 'DBmaestroAccount'
+              useWindows: false
+              # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
+              # Leave empty if the JAR is pre-installed on the runner.
+              version: $(CLI_VERSION)

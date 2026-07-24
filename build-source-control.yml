@@ -1,111 +1,117 @@
-﻿# Example: Build from Source Control (Tasks or Specific Commit)
-# Builds a DBmaestro package from source control by task list or commit hash.
-# Use "All Changes" to include everything since the last build.
+# Example: Build from Source Control (Azure DevOps)
+# Builds a DBmaestro package from source control by task list, commit hash, or all changes.
+# Trigger manually via the Azure DevOps UI and set the required parameters.
+resources:
+  repositories:
+    - repository: dbmaestro-cicd
+      type: github
+      name: DBMaestroDev/dbmaestro-cicd
+      endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
+      ref: refs/tags/v1
 
-name: Example - Build from Source Control (Linux)
+parameters:
+  - name: packageName
+    displayName: 'Package name to build'
+    type: string
+  - name: projectName
+    displayName: 'DBmaestro project name'
+    type: string
+    default: 'paradigm'
+  - name: environmentName
+    displayName: 'Development environment name'
+    type: string
+    default: 'development'
+  - name: buildType
+    displayName: 'What to include in the package'
+    type: string
+    values:
+      - 'Specific Tasks'
+      - 'Specific Commit'
+    default: 'Specific Tasks'
+  - name: tasksList
+    displayName: 'Task IDs (comma-separated, optional - used when buildType = Specific Tasks)'
+    type: string
+    default: 'none'
+  - name: commitHash
+    displayName: 'Commit hash (optional - used when buildType = Specific Commit)'
+    type: string
+    default: 'none'
+  - name: createDowngradeScripts
+    displayName: 'Create downgrade scripts'
+    type: string
+    values:
+      - 'False'
+      - 'True'
+    default: 'True'
+  - name: tags
+    displayName: 'Comma-separated tags to apply after build (optional, e.g., "TASK-123,TASK-456")'
+    type: string
+    default: ''
+  - name: tagTypeName
+    displayName: 'Tag type name'
+    type: string
+    default: 'Task'
+  - name: agentJarPath
+    type: string
+    default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
+  - name: runnerPool
+    type: string
+    default: 'ado-linux-agent'
+trigger: none
+pr: none
 
-on:
-  workflow_dispatch:
-    inputs:
-      package_name:
-        description: 'Package name to build'
-        required: true
-        type: string
-      project_name:
-        description: 'DBmaestro project name'
-        required: true
-        type: choice
-        options:
-          - 'paradigm'
-          - 'Demo-MSSQL'
-        default: 'paradigm'
-      environment_name:
-        description: 'Development environment name'
-        required: false
-        type: string
-        default: 'Dev_Env_1'
-      build_type:
-        description: 'What to include in the package'
-        required: true
-        type: choice
-        options:
-          - 'Specific Tasks'
-          - 'Specific Commit'
-        default: 'Specific Tasks'
-      tasks_list:
-        description: 'Comma-separated task IDs (used when build_type is "Specific Tasks")'
-        required: false
-        type: string
-      commit_hash:
-        description: 'Commit hash (used when build_type is "Specific Commit")'
-        required: false
-        type: string
-      create_downgrade_scripts:
-        description: 'Create downgrade scripts'
-        required: false
-        type: choice
-        options:
-          - 'True'
-          - 'False'
-        default: 'True'
-      tags:
-        description: 'Comma-separated tags to apply after build (optional, e.g., "TASK-123,TASK-456")'
-        required: false
-        type: string
-        default: ''
-      tag_type_name:
-        description: 'Tag type name'
-        required: false
-        type: string
-        default: 'Task'
-jobs:
-  prepare_parameters:
-    name: Prepare Build Parameters
-    runs-on: ubuntu-latest
-    outputs:
-      version_type: ${{ steps.set-params.outputs.version_type }}
-      additional_info: ${{ steps.set-params.outputs.additional_info }}
-    steps:
-      - name: Set Build Parameters
-        id: set-params
-        shell: bash
-        run: |
-          case "${{ inputs.build_type }}" in
-            "Specific Tasks")
-              VERSION_TYPE="Tasks"
-              ADDITIONAL_INFO="${{ inputs.tasks_list }}"
-              ;;
-            "Specific Commit")
-              VERSION_TYPE="Specific Commit"
-              ADDITIONAL_INFO="${{ inputs.commit_hash }}"
-              ;;
-            *)
-              VERSION_TYPE=""
-              ADDITIONAL_INFO=""
-              ;;
-          esac
-          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
-          echo "additional_info=$ADDITIONAL_INFO" >> $GITHUB_OUTPUT
+stages:
+  - stage: Build
+    displayName: 'Build Package from Source Control'
+    jobs:
+      - job: BuildFromSource
+        displayName: 'Build Package - ${{ parameters.packageName }}'
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - checkout: self
+            fetchDepth: 1
 
-  build_and_validate:
-    name: Build and Validate Package
-    needs: prepare_parameters
-    uses: DBMaestroDev/dbmaestro-cicd/.github/workflows/sh-build-source-control.yml@v1
-    with:
-      package_name: ${{ inputs.package_name }}
-      project_name: ${{ inputs.project_name }}
-      environment-name: ${{ inputs.environment_name }}
-      version_type: ${{ needs.prepare_parameters.outputs.version_type }}
-      additional_information: ${{ needs.prepare_parameters.outputs.additional_info }}
-      create_downgrade_scripts: ${{ inputs.create_downgrade_scripts }}
-      tags: ${{ inputs.tags }}
-      tag_type_name: ${{ inputs.tag_type_name }}
-      cli_version: ${{ vars.CLI_VERSION }}  # set CLI_VERSION repo variable; leave empty if JAR is pre-installed
-      agent_jar_path: '/home/runner/DBmaestroAgent.jar'
-      use_ssl: 'True'
-      auth_type: 'DBmaestroAccount'
-      runner: 'dbmaestro-linux'
-      dbmaestro_server: ${{ vars.DBMAESTRO_SERVER }}
-      dbmaestro_user: ${{ vars.DBMAESTRO_USER }}
-    secrets:
-      DBMAESTRO_PASSWORD: ${{ secrets.DBMAESTRO_PASSWORD }}
+          - checkout: dbmaestro-cicd
+            fetchDepth: 1
+
+          - bash: |
+              case "${{ parameters.buildType }}" in
+                "Specific Tasks")
+                  if [ "${{ parameters.tasksList }}" = "none" ] || [ -z "${{ parameters.tasksList }}" ]; then
+                    echo "##vso[task.logissue type=error]buildType is 'Specific Tasks' but tasksList is not provided"
+                    exit 1
+                  fi
+                  echo "##vso[task.setvariable variable=versionType]Tasks"
+                  echo "##vso[task.setvariable variable=additionalInfo]${{ parameters.tasksList }}"
+                  ;;
+                "Specific Commit")
+                  if [ "${{ parameters.commitHash }}" = "none" ] || [ -z "${{ parameters.commitHash }}" ]; then
+                    echo "##vso[task.logissue type=error]buildType is 'Specific Commit' but commitHash is not provided"
+                    exit 1
+                  fi
+                  echo "##vso[task.setvariable variable=versionType]Specific Commit"
+                  echo "##vso[task.setvariable variable=additionalInfo]${{ parameters.commitHash }}"
+                  ;;
+              esac
+            displayName: 'Resolve Build Type Parameters'
+
+          - template: azure-devops/templates/build-from-source.yml@dbmaestro-cicd
+            parameters:
+              packageName: ${{ parameters.packageName }}
+              projectName: ${{ parameters.projectName }}
+              envName: ${{ parameters.environmentName }}
+              versionType: $(versionType)
+              additionalInformation: $(additionalInfo)
+              agentJarPath: ${{ parameters.agentJarPath }}
+              server: $(DBMAESTRO_SERVER)
+              user: $(DBMAESTRO_USER)
+              password: $(DBMAESTRO_PASSWORD)
+              useSsl: 'True'
+              authType: 'DBmaestroAccount'
+              createDowngradeScripts: ${{ parameters.createDowngradeScripts }}
+              tags: ${{ parameters.tags }}
+              tagTypeName: ${{ parameters.tagTypeName }}
+              # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
+              # Leave empty if the JAR is pre-installed on the runner.
+              version: $(CLI_VERSION)
+              useWindows: false
