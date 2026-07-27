@@ -36,6 +36,11 @@ parameters:
   - name: runnerPool
     type: string
     default: 'NicolasHosted'
+
+# Makes the run name in the ADO UI show the target environment/package
+# (e.g. "integration_TASK-42_20260727.2") instead of the generic default build number.
+name: '${{ parameters.targetEnvironment }}_${{ parameters.packageNames }}_$(Date:yyyyMMdd)$(Rev:.r)'
+
 # Auto-trigger on pushes to tracked environment branches
 trigger:
   branches:
