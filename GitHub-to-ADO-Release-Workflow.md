@@ -356,7 +356,16 @@ Consider adding an equivalent subscription filtered to `Paradigm - Upgrade Envir
 7. Confirm the Upgrade (production) stage queues pipeline 54 with `targetEnvironment=production` and `packageNames=TASK-42`, and that it succeeds.
 8. Approve the Production post-approval gate and confirm the run completes successfully.
 
-## 12. Troubleshooting
+## 12. Friendly run names for pipelines 53 and 54
+
+By default, Azure DevOps run names show a generic build number like `#20260727.2` alongside whatever the latest commit message happens to be on that pipeline's own source repo — not necessarily anything meaningful. Both target pipelines now set a custom build number format so each run in the ADO UI immediately shows what it's building:
+
+- `build-source-control.yml`: `name: '${{ parameters.packageName }}_$(Date:yyyyMMdd)$(Rev:.r)'` → e.g. `TASK-42_20260727.2`
+- `upgrade-environment.yml`: `name: '${{ parameters.targetEnvironment }}_${{ parameters.packageNames }}_$(Date:yyyyMMdd)$(Rev:.r)'` → e.g. `integration_TASK-42_20260727.2`
+
+This is purely cosmetic — it doesn't change any pipeline behavior, only how each run is labeled in the Runs list.
+
+## 13. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
