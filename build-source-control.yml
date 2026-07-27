@@ -115,3 +115,15 @@ stages:
               # Leave empty if the JAR is pre-installed on the runner.
               version: $(CLI_VERSION)
               useWindows: false
+
+          - template: azure-devops/templates/precheck-package.yml@dbmaestro-cicd
+            parameters:
+              packageName: ${{ parameters.packageName }}
+              projectName: ${{ parameters.projectName }}
+              agentJarPath: ${{ parameters.agentJarPath }}
+              server: $(DBMAESTRO_SERVER)
+              user: $(DBMAESTRO_USER)
+              password: $(DBMAESTRO_PASSWORD)
+              useSsl: 'True'
+              authType: 'DBmaestroAccount'
+              useWindows: false
