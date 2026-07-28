@@ -15,7 +15,7 @@ The workaround is a pipeline whose own source repository is `sc-paradigm1`. Beca
 ## 3. Prerequisites
 
 - GitHub service connection **"GitHub using Azure Pipelines app"**, connected to the DBMaestroDev GitHub org.
-- Pipeline **"Paradigm - Build with Source Control"** — `dbmsc/poc`, definition ID **53**. Its only required parameter (no default) is `packageName`.
+- Pipeline **"Paradigm - Build with Source Control"** — `dbmsc/poc`, definition ID **53**. `packageName` has no default, so it's always required. `tasksList` technically has a default (`'none'`), but the pipeline's own validation step fails the run if `buildType` is left at its default (`'Specific Tasks'`) and `tasksList` is `'none'`/empty — so in practice both `packageName` and `tasksList` must be supplied. This workflow sets both to the extracted TaskID.
 - Pipeline **"Paradigm - Upgrade Environment"** — `dbmsc/poc`, definition ID **54**. All of its parameters (`targetEnvironment`, `packageNames`, `tagName`, `projectName`, `agentJarPath`, `runnerPool`) have defaults; the workflow explicitly sets `targetEnvironment` and `packageNames`.
 
 ## 4. Commit message convention
