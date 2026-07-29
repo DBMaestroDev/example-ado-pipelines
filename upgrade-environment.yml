@@ -21,11 +21,11 @@ parameters:
   - name: packageNames
     displayName: 'Package names to upgrade (comma-separated, leave empty to auto-detect)'
     type: string
-    default: ''
+    default: 'none'
   - name: tagName
     displayName: 'Tag name to upgrade (use instead of packageNames)'
     type: string
-    default: ''
+    default: 'none'
   - name: projectName
     type: string
     default: 'Example-ADO'
@@ -36,9 +36,9 @@ parameters:
     type: string
     default: 'dbmaestro-linux'
 
-# Makes the run name in the ADO UI show the target environment/package
-# (e.g. "Integration_TASK-42_20260727.2") instead of the generic default build number.
-name: '${{ parameters.targetEnvironment }}_${{ parameters.packageNames }}_$(Date:yyyyMMdd)$(Rev:.r)'
+# Makes the run name in the ADO UI show the target environment and task
+# (e.g. "Integration - TaskID: TASK-42 (20260727.2)") instead of the generic default build number.
+name: '${{ parameters.targetEnvironment }} - TaskID: ${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'
 
 stages:
   - stage: Upgrade

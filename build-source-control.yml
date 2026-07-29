@@ -59,8 +59,8 @@ parameters:
     default: 'dbmaestro-linux'
 
 # Makes the run name in the ADO UI show the package/task being built
-# (e.g. "TASK-42_20260727.2") instead of the generic default build number.
-name: '${{ parameters.packageName }}_$(Date:yyyyMMdd)$(Rev:.r)'
+# (e.g. "TaskID: TASK-42 (20260727.2)") instead of the generic default build number.
+name: 'TaskID: ${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'
 
 trigger: none
 pr: none
