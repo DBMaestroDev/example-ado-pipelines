@@ -56,7 +56,7 @@ parameters:
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'Default'
+    default: 'dbmaestro-linux'
 
 # Makes the run name in the ADO UI show the package/task being built
 # (e.g. "TASK-42_20260727.2") instead of the generic default build number.
