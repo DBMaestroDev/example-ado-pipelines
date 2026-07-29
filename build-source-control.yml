@@ -20,7 +20,7 @@ parameters:
   - name: environmentName
     displayName: 'Development environment name'
     type: string
-    default: 'development'
+    default: 'Development'
   - name: buildType
     displayName: 'What to include in the package'
     type: string
