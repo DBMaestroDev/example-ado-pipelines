@@ -37,8 +37,9 @@ parameters:
     default: 'dbmaestro-linux'
 
 # Makes the run name in the ADO UI show the target environment and task
-# (e.g. "Integration - TaskID: TASK-42 (20260727.2)") instead of the generic default build number.
-name: '${{ parameters.targetEnvironment }} - TaskID: ${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'
+# (e.g. "Integration - TaskID-TASK-42 (20260727.2)") instead of the generic default build number.
+# NOTE: build numbers can't contain ':' (or '"/<>\|?@*') - ADO rejects it.
+name: '${{ parameters.targetEnvironment }} - TaskID-${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'
 
 stages:
   - stage: Upgrade

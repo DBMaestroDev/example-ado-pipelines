@@ -46,7 +46,7 @@ parameters:
   - name: tags
     displayName: 'Comma-separated tags to apply after build (optional, e.g., "TASK-123,TASK-456")'
     type: string
-    default: ''
+    default: 'none'
   - name: tagTypeName
     displayName: 'Tag type name'
     type: string
@@ -59,8 +59,9 @@ parameters:
     default: 'dbmaestro-linux'
 
 # Makes the run name in the ADO UI show the package/task being built
-# (e.g. "TaskID: TASK-42 (20260727.2)") instead of the generic default build number.
-name: 'TaskID: ${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'
+# (e.g. "TaskID-TASK-42 (20260727.2)") instead of the generic default build number.
+# NOTE: build numbers can't contain ':' (or '"/<>\|?@*') - ADO rejects it.
+name: 'TaskID-${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'
 
 trigger: none
 pr: none
