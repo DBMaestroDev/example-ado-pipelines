@@ -14,11 +14,10 @@ parameters:
   - name: targetEnvironment
     displayName: 'Target environment for upgrade (manual runs)'
     type: string
-    default: 'integration'
+    default: 'Integration'
     values:
-      - 'integration'
-      - 'qa'
-      - 'production'
+      - 'Integration'
+      - 'Production'
   - name: packageNames
     displayName: 'Package names to upgrade (comma-separated, leave empty to auto-detect)'
     type: string
@@ -29,33 +28,17 @@ parameters:
     default: ''
   - name: projectName
     type: string
-    default: 'paradigm'
+    default: 'Example-ADO'
   - name: agentJarPath
     type: string
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'NicolasHosted'
+    default: 'Default'
 
 # Makes the run name in the ADO UI show the target environment/package
 # (e.g. "integration_TASK-42_20260727.2") instead of the generic default build number.
 name: '${{ parameters.targetEnvironment }}_${{ parameters.packageNames }}_$(Date:yyyyMMdd)$(Rev:.r)'
-
-# Auto-trigger on pushes to tracked environment branches
-trigger:
-  branches:
-    include:
-      - integration
-      - qa
-      - production
-
-# Run validating upgrade on pull requests targeting environment branches
-pr:
-  branches:
-    include:
-      - QA_Env_1
-      - Prod_Env_1
-      - Prod_Env_3
 
 stages:
   - stage: Upgrade
