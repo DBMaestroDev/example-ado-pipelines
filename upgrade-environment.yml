@@ -14,10 +14,10 @@ parameters:
   - name: targetEnvironment
     displayName: 'Target environment for upgrade (manual runs)'
     type: string
-    default: 'Integration'
+    default: 'Release Source'
     values:
-      - 'Integration'
-      - 'Production'
+      - 'Release Source'
+      - 'Prod_Env_1'
   - name: packageNames
     displayName: 'Package names to upgrade (comma-separated, leave empty to auto-detect)'
     type: string
@@ -37,7 +37,7 @@ parameters:
     default: 'Default'
 
 # Makes the run name in the ADO UI show the target environment/package
-# (e.g. "integration_TASK-42_20260727.2") instead of the generic default build number.
+# (e.g. "Release Source_TASK-42_20260727.2") instead of the generic default build number.
 name: '${{ parameters.targetEnvironment }}_${{ parameters.packageNames }}_$(Date:yyyyMMdd)$(Rev:.r)'
 
 stages:
