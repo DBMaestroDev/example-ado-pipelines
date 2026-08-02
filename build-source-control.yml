@@ -80,25 +80,26 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          - bash: |
-              case "${{ parameters.buildType }}" in
-                "Specific Tasks")
-                  if [ "${{ parameters.tasksList }}" = "none" ] || [ -z "${{ parameters.tasksList }}" ]; then
-                    echo "##vso[task.logissue type=error]buildType is 'Specific Tasks' but tasksList is not provided"
+          - powershell: |
+              $ErrorActionPreference = "Stop"
+              switch ("${{ parameters.buildType }}") {
+                "Specific Tasks" {
+                  if ("${{ parameters.tasksList }}" -eq "none" -or [string]::IsNullOrWhiteSpace("${{ parameters.tasksList }}")) {
+                    Write-Host "##vso[task.logissue type=error]buildType is 'Specific Tasks' but tasksList is not provided"
                     exit 1
-                  fi
-                  echo "##vso[task.setvariable variable=versionType]Tasks"
-                  echo "##vso[task.setvariable variable=additionalInfo]${{ parameters.tasksList }}"
-                  ;;
-                "Specific Commit")
-                  if [ "${{ parameters.commitHash }}" = "none" ] || [ -z "${{ parameters.commitHash }}" ]; then
-                    echo "##vso[task.logissue type=error]buildType is 'Specific Commit' but commitHash is not provided"
+                  }
+                  Write-Host "##vso[task.setvariable variable=versionType]Tasks"
+                  Write-Host "##vso[task.setvariable variable=additionalInfo]${{ parameters.tasksList }}"
+                }
+                "Specific Commit" {
+                  if ("${{ parameters.commitHash }}" -eq "none" -or [string]::IsNullOrWhiteSpace("${{ parameters.commitHash }}")) {
+                    Write-Host "##vso[task.logissue type=error]buildType is 'Specific Commit' but commitHash is not provided"
                     exit 1
-                  fi
-                  echo "##vso[task.setvariable variable=versionType]Specific Commit"
-                  echo "##vso[task.setvariable variable=additionalInfo]${{ parameters.commitHash }}"
-                  ;;
-              esac
+                  }
+                  Write-Host "##vso[task.setvariable variable=versionType]Specific Commit"
+                  Write-Host "##vso[task.setvariable variable=additionalInfo]${{ parameters.commitHash }}"
+                }
+              }
             displayName: 'Resolve Build Type Parameters'
 
           - template: azure-devops/templates/build-from-source.yml@dbmaestro-cicd

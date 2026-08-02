@@ -1,5 +1,5 @@
 # Example: Upgrade Environment (Azure DevOps)
-# Upgrades a DBmaestro environment on push, pull request, or manual trigger.
+# Upgrades a DBmaestro environment on manual trigger.
 # lockBehavior: sequential prevents concurrent upgrades to the same environment.
 
 resources:
@@ -57,22 +57,23 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          - bash: |
+          - powershell: |
+              $ErrorActionPreference = "Stop"
               # Determine the target environment and whether this is a PR
-              if [ -n "$SYSTEM_PULLREQUEST_TARGETBRANCH" ]; then
-                TARGET="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
-                IS_PR="true"
-              elif [ "$(Build.Reason)" = "Manual" ]; then
-                TARGET="${{ parameters.targetEnvironment }}"
-                IS_PR="false"
-              else
-                TARGET="$(Build.SourceBranchName)"
-                IS_PR="false"
-              fi
-              echo "Target environment: $TARGET"
-              echo "Is pull request: $IS_PR"
-              echo "##vso[task.setvariable variable=resolvedTarget]$TARGET"
-              echo "##vso[task.setvariable variable=resolvedIsPr]$IS_PR"
+              if ($env:SYSTEM_PULLREQUEST_TARGETBRANCH) {
+                $target = $env:SYSTEM_PULLREQUEST_TARGETBRANCH -replace '^refs/heads/', ''
+                $isPr = "true"
+              } elseif ("$(Build.Reason)" -eq "Manual") {
+                $target = "${{ parameters.targetEnvironment }}"
+                $isPr = "false"
+              } else {
+                $target = "$(Build.SourceBranchName)"
+                $isPr = "false"
+              }
+              Write-Host "Target environment: $target"
+              Write-Host "Is pull request: $isPr"
+              Write-Host "##vso[task.setvariable variable=resolvedTarget]$target"
+              Write-Host "##vso[task.setvariable variable=resolvedIsPr]$isPr"
             displayName: 'Resolve Target Environment'
 
           - template: azure-devops/templates/upgrade-environment.yml@dbmaestro-cicd
