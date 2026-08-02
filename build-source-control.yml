@@ -80,7 +80,7 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          - powershell: |
+          - pwsh: |
               $ErrorActionPreference = "Stop"
               switch ("${{ parameters.buildType }}") {
                 "Specific Tasks" {

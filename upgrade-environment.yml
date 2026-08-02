@@ -57,7 +57,7 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          - powershell: |
+          - pwsh: |
               $ErrorActionPreference = "Stop"
               # Determine the target environment and whether this is a PR
               if ($env:SYSTEM_PULLREQUEST_TARGETBRANCH) {
