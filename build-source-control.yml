@@ -56,7 +56,7 @@ parameters:
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'dbmaestro-linux'
+    default: 'dbmaestro-windows'
 
 # Makes the run name in the ADO UI show the package/task being built
 # (e.g. "TaskID-TASK-42 (20260727.2)") instead of the generic default build number.
@@ -120,7 +120,7 @@ stages:
               # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
               # Leave empty if the JAR is pre-installed on the runner.
               version: $(CLI_VERSION)
-              useWindows: false
+              useWindows: true
 
           - template: azure-devops/templates/precheck-package.yml@dbmaestro-cicd
             parameters:
@@ -132,4 +132,4 @@ stages:
               password: $(DBMAESTRO_PASSWORD)
               useSsl: 'True'
               authType: 'DBmaestroAccount'
-              useWindows: false
+              useWindows: true

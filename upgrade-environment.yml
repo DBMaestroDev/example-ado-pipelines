@@ -87,7 +87,7 @@ stages:
               password: $(DBMAESTRO_PASSWORD)
               useSsl: 'True'
               authType: 'DBmaestroAccount'
-              useWindows: false
+              useWindows: true
               # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
               # Leave empty if the JAR is pre-installed on the runner.
               version: $(CLI_VERSION)
