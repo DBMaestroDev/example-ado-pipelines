@@ -57,31 +57,12 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              # Determine the target environment and whether this is a PR
-              if ($env:SYSTEM_PULLREQUEST_TARGETBRANCH) {
-                $target = $env:SYSTEM_PULLREQUEST_TARGETBRANCH -replace '^refs/heads/', ''
-                $isPr = "true"
-              } elseif ("$(Build.Reason)" -eq "Manual") {
-                $target = "${{ parameters.targetEnvironment }}"
-                $isPr = "false"
-              } else {
-                $target = "$(Build.SourceBranchName)"
-                $isPr = "false"
-              }
-              Write-Host "Target environment: $target"
-              Write-Host "Is pull request: $isPr"
-              Write-Host "##vso[task.setvariable variable=resolvedTarget]$target"
-              Write-Host "##vso[task.setvariable variable=resolvedIsPr]$isPr"
-            displayName: 'Resolve Target Environment'
-
           - template: azure-devops/templates/upgrade-environment.yml@dbmaestro-cicd
             parameters:
               packageName: ${{ parameters.packageNames }}
               tagName: ${{ parameters.tagName }}
               projectName: ${{ parameters.projectName }}
-              targetEnvironment: $(resolvedTarget)
+              targetEnvironment: ${{ parameters.targetEnvironment }}
               agentJarPath: ${{ parameters.agentJarPath }}
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
