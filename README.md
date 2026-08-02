@@ -18,7 +18,7 @@ The workaround is a pipeline whose own source repository is `example-ado-source-
 - Pipeline **"Build and Precheck Package - Source Control"** — org `dbmsc`, project `Example`, definition ID **59**. `packageName` has no default, so it's always required. `tasksList` technically has a default (`'none'`), but the pipeline's own validation step fails the run if `buildType` is left at its default (`'Specific Tasks'`) and `tasksList` is `'none'`/empty — so in practice both `packageName` and `tasksList` must be supplied. This workflow sets both to the extracted TaskID.
 - Pipeline **"Upgrade Environment"** — org `dbmsc`, project `Example`, definition ID **60**. All of its parameters (`targetEnvironment`, `packageNames`, `tagName`, `projectName`, `agentJarPath`, `runnerPool`) have defaults; the workflow explicitly sets `targetEnvironment` and `packageNames`. `targetEnvironment` only accepts `'Integration'` or `'Production'` (case-sensitive, `'qa'` was dropped) — the orchestrator must pass those exact strings.
 - A GitHub service connection named exactly **`dbmaestro-cicd`**, authorized in this project and pointed at `DBMaestroDev/dbmaestro-cicd`. Both `build-source-control.yml` and `upgrade-environment.yml` declare this as a second `resources.repositories` entry (`endpoint: dbmaestro-cicd`) so they can check out DBmaestro's reusable pipeline templates. Without this exact-named, authorized connection, both pipelines fail immediately with `Repository dbmaestro-cicd references endpoint dbmaestro-cicd which does not exist or is not authorized for use` — see section 7.
-- A registered self-hosted agent in the **`dbmaestro-linux`** pool (used directly by the orchestrator's own jobs) and one in the **`Default`** pool (used by `build-source-control.yml`/`upgrade-environment.yml` via their `runnerPool` parameter default). These are two separate pool names as currently configured — confirm whether that's intentional or whether they're meant to be the same pool before relying on this in production.
+- A registered self-hosted agent in the **`dbmaestro-windows`** pool (used directly by the orchestrator's own jobs) and one in the **`Default`** pool (used by `build-source-control.yml`/`upgrade-environment.yml` via their `runnerPool` parameter default). These are two separate pool names as currently configured — confirm whether that's intentional or whether they're meant to be the same pool before relying on this in production.
 
 > **Naming heads-up:** there are two different "project" concepts in play, and they currently have different values. The orchestrator's `targetProject` variable (the actual **Azure DevOps** project pipelines 59/60 live in) is `'Example'`. The `projectName` parameter inside `build-source-control.yml`/`upgrade-environment.yml` (DBmaestro's own internal project concept, unrelated to ADO) defaults to `'Example-ADO'`. Worth double-checking these are supposed to differ before assuming it's a typo.
 
@@ -119,7 +119,7 @@ stages:
     displayName: 'Build Package from Commit'
     jobs:
       - job: Build
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         steps:
           - checkout: self
             fetchDepth: 1
@@ -188,7 +188,7 @@ stages:
       - deployment: IntegrationPreApprovalGate
         displayName: 'Await Integration pre-approval'
         environment: 'Integration-pre-approval'
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         strategy:
           runOnce:
             deploy:
@@ -205,7 +205,7 @@ stages:
       packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
     jobs:
       - job: UpgradeIntegration
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         steps:
           - bash: |
               set -e
@@ -248,7 +248,7 @@ stages:
       - deployment: IntegrationPostApprovalGate
         displayName: 'Confirm Integration upgrade'
         environment: 'Integration-post-approval'
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         strategy:
           runOnce:
             deploy:
@@ -265,7 +265,7 @@ stages:
       - deployment: ProductionPreApprovalGate
         displayName: 'Await Production pre-approval'
         environment: 'Production-pre-approval'
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         strategy:
           runOnce:
             deploy:
@@ -282,7 +282,7 @@ stages:
       packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
     jobs:
       - job: UpgradeProduction
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         steps:
           - bash: |
               set -e
@@ -325,7 +325,7 @@ stages:
       - deployment: ProductionPostApprovalGate
         displayName: 'Finalize workflow'
         environment: 'Production-post-approval'
-        pool: dbmaestro-linux
+        pool: dbmaestro-windows
         strategy:
           runOnce:
             deploy:
@@ -450,7 +450,7 @@ This is purely cosmetic — it doesn't change any pipeline behavior, only how ea
 | Symptom | Fix |
 |---|---|
 | `ERROR: Repository dbmaestro-cicd references endpoint dbmaestro-cicd which does not exist or is not authorized for use` | The `dbmaestro-cicd` GitHub service connection doesn't exist in this project (or isn't authorized) — see step 7. |
-| `##[error]No hosted parallelism has been purchased or granted` | This org has 0 Microsoft-hosted parallel jobs. Don't switch pools to a `vmImage` — use the self-hosted pools already configured (`dbmaestro-linux` for the orchestrator, `Default` for pipelines 59/60), and rely on the fire-and-forget design (section 5a). |
+| `##[error]No hosted parallelism has been purchased or granted` | This org has 0 Microsoft-hosted parallel jobs. Don't switch pools to a `vmImage` — use the self-hosted pools already configured (`dbmaestro-windows` for the orchestrator, `Default` for pipelines 59/60), and rely on the fire-and-forget design (section 5a). |
 | `TF215106: ... needs Queue builds permissions for build pipeline 59/60 ...` | Grant Queue builds = Allow to the project's Build Service identity on that pipeline's Security panel (see step 9). |
 | `TF215106: ... needs Edit queue build configuration permissions ...` | Grant Edit queue build configuration = Allow to the same identity on the same Security panel. |
 | Stage stays "Waiting" indefinitely at a gate | Expected — that's the approval check. Open the run in the ADO UI and approve/reject the pending environment check. If no one is ever prompted, confirm the Approval check is actually attached to that environment (step 10). |

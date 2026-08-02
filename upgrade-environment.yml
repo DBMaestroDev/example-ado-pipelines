@@ -34,7 +34,7 @@ parameters:
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
   - name: runnerPool
     type: string
-    default: 'dbmaestro-linux'
+    default: 'dbmaestro-windows'
 
 # Makes the run name in the ADO UI show the target environment and task
 # (e.g. "Integration - TaskID-TASK-42 (20260727.2)") instead of the generic default build number.
