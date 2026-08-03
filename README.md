@@ -450,6 +450,25 @@ For initial testing, all four environments were instead assigned the same single
 
 Since the workflow no longer verifies success automatically (section 5a), whoever approves each gate should confirm the previous run actually succeeded first — the "Queue" steps print the run's URL to check.
 
+### 10a. First-run resource authorization (separate from the approval check)
+
+The first time the orchestrator run actually reaches each environment, Azure DevOps pauses with a banner like:
+
+```
+This pipeline needs permission to access a resource before this run can continue to Integration - Post-Approval Gate
+This pipeline needs permission to access a resource before this run can continue to Production - Pre-Approval Gate
+```
+
+This is a **one-time authorization per (pipeline, environment) pair**, distinct from the Approval check configured above — it exists because a YAML pipeline isn't automatically allowed to use any environment resource it references, even ones with no approval check at all. Expect to see this once for each of the four environments the first time the orchestrator runs end to end (not just the two shown above).
+
+To resolve it:
+
+1. Open the run in the ADO UI — it'll show a **"View"** / **"Permission"** prompt on the waiting stage.
+2. Click **Permit** (a project Administrator or someone with **Manage** permission on that environment can do this; approving the check itself is not enough).
+3. Optionally check **"Permit for all pipelines"** while permitting, or pre-authorize it ahead of time via the environment → "⋮" → **Security** → grant the pipeline access — either avoids hitting this prompt again on future runs of the same pipeline.
+
+Until it's permitted, the stage sits waiting on this authorization screen and never even reaches the Approval check — so if a gate seems stuck, check for this prompt before assuming the Approval check itself is misconfigured.
+
 ## 11. Failure notifications (pipeline 59)
 
 Azure DevOps' built-in notification subscriptions email a distribution list whenever pipeline 59 fails — no SMTP or pipeline code involved.
@@ -496,6 +515,7 @@ Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject
 | `TF215106: ... needs Queue builds permissions for build pipeline 59/60 ...` | Grant Queue builds = Allow to the project's Build Service identity on that pipeline's Security panel (see step 9). |
 | `TF215106: ... needs Edit queue build configuration permissions ...` | Grant Edit queue build configuration = Allow to the same identity on the same Security panel. |
 | Stage stays "Waiting" indefinitely at a gate | Expected — that's the approval check. Open the run in the ADO UI and approve/reject the pending environment check. If no one is ever prompted, confirm the Approval check is actually attached to that environment (step 10). |
+| `This pipeline needs permission to access a resource before this run can continue to <environment>` | One-time resource authorization, separate from the Approval check — see section 10a. Someone with Manage permission on that environment must click **Permit** (optionally "for all pipelines") before the stage will even reach the Approval check. Expect this once per environment on first use. |
 | A gate was approved but the downstream run actually failed | Fire-and-forget means nothing catches this automatically (section 5a) — the approver needs to check the run before approving. Consider re-enabling the commented-out polling code (section 6) if/when a second parallel job becomes available. |
 | `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing pipeline 59/60 | Most likely `stageDependencies.Build.Build.outputs['extract.packageName']` didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract` (the `name:` field) and sets the variable with `isOutput=true`; (2) the consuming stage (`UpgradeIntegration`/`UpgradeProduction`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 5. |
 | Build/Upgrade step fails with "Could not find 'TaskID: <value>' ..." | The commit message didn't match the required `<version>; TaskID: <value>` format — amend the commit message and re-push. |

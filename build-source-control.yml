@@ -113,7 +113,7 @@ stages:
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
               password: $(DBMAESTRO_PASSWORD)
-              useSsl: 'True'
+              useSsl: 'False'
               authType: 'DBmaestroAccount'
               createDowngradeScripts: ${{ parameters.createDowngradeScripts }}
               tags: ${{ parameters.tags }}
@@ -131,6 +131,6 @@ stages:
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
               password: $(DBMAESTRO_PASSWORD)
-              useSsl: 'True'
+              useSsl: 'False'
               authType: 'DBmaestroAccount'
               useWindows: true

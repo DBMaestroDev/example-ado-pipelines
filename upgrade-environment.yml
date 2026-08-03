@@ -67,7 +67,7 @@ stages:
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
               password: $(DBMAESTRO_PASSWORD)
-              useSsl: 'True'
+              useSsl: 'False'
               authType: 'DBmaestroAccount'
               useWindows: true
               # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
