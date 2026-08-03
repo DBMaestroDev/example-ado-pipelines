@@ -14,13 +14,29 @@ The workaround is a pipeline whose own source repository is `example-ado-source-
 
 ## 3. Prerequisites
 
+> **A note on specific values below:** this guide documents one real deployment, so it names concrete values throughout (an org, a project, two pipeline definition IDs, a pool name, and so on). None of these are requirements of the design — they're just what this instance happens to use. Your organization/project names will differ, and **pipeline definition IDs in particular are assigned automatically by Azure DevOps** the first time each pipeline is created (step 8) — you can't choose or predict them in advance. Substitute your own values throughout; the table below is the full list of what to swap.
+
+| Item | Value used in this guide |
+|---|---|
+| Azure DevOps organization | `dbmsc` |
+| Azure DevOps project (where the build/upgrade pipelines live) | `Example` |
+| DBmaestro project name (`projectName` parameter — a separate, unrelated concept, see naming heads-up below) | `Example-ADO` |
+| Build pipeline | "Build and Precheck Package - Source Control", definition ID **59** |
+| Upgrade pipeline | "Upgrade Environment", definition ID **60** |
+| Self-hosted agent pool | `dbmaestro-windows` |
+| GitHub org (source repos + `dbmaestro-cicd` templates) | `DBMaestroDev` |
+| `dbmaestro-cicd` service connection name | `dbmaestro-cicd` |
+| Failure-notification distribution list | `devops@dbmaestro.com` |
+| Gate approvers | `approver1@dbmaestro.com`, `approver2@dbmaestro.com` |
+
 - GitHub service connection **"GitHub using Azure Pipelines app"**, connected to the DBMaestroDev GitHub org.
 - Pipeline **"Build and Precheck Package - Source Control"** — org `dbmsc`, project `Example`, definition ID **59**. `packageName` has no default, so it's always required. `tasksList` technically has a default (`'none'`), but the pipeline's own validation step fails the run if `buildType` is left at its default (`'Specific Tasks'`) and `tasksList` is `'none'`/empty — so in practice both `packageName` and `tasksList` must be supplied. This workflow sets both to the extracted TaskID.
 - Pipeline **"Upgrade Environment"** — org `dbmsc`, project `Example`, definition ID **60**. All of its parameters (`targetEnvironment`, `packageNames`, `tagName`, `projectName`, `agentJarPath`, `runnerPool`) have defaults; the workflow explicitly sets `targetEnvironment`, `packageNames`, and `runnerPool`. `targetEnvironment` only accepts `'Integration'` or `'Production'` (case-sensitive, `'qa'` was dropped) — the orchestrator must pass those exact strings.
 - A GitHub service connection named exactly **`dbmaestro-cicd`**, authorized in this project and pointed at `DBMaestroDev/dbmaestro-cicd`. Both `build-source-control.yml` and `upgrade-environment.yml` declare this as a second `resources.repositories` entry (`endpoint: dbmaestro-cicd`) so they can check out DBmaestro's reusable pipeline templates. Without this exact-named, authorized connection, both pipelines fail immediately with `Repository dbmaestro-cicd references endpoint dbmaestro-cicd which does not exist or is not authorized for use` — see section 7.
-- A registered self-hosted **Windows** agent in the **`dbmaestro-windows`** pool, with **PowerShell 7+ (`pwsh`)** installed. All three pipelines run on this one pool now — the orchestrator's jobs directly (`pool: dbmaestro-windows`), and pipelines 59/60 via their `runnerPool` parameter, which defaults to `'dbmaestro-windows'` and is also explicitly passed by the orchestrator (`downstreamRunnerPool` variable). If `pwsh` is ever missing from an agent, every step falls back to working under the `powershell:` task (Windows PowerShell 5.1, always present) — see the NOTE at the top of section 6.
+- A registered self-hosted **Windows** agent in the **`dbmaestro-windows`** pool, with **PowerShell 7+ (`pwsh`)** installed. All three pipelines run on this one pool now — the orchestrator's jobs directly (`pool: dbmaestro-windows`), and pipelines 59/60 via their `runnerPool` parameter, which defaults to `'dbmaestro-windows'` and is also explicitly passed by the orchestrator (`downstreamRunnerPool` variable). **PowerShell 7+ is a hard requirement, not a fallback-able one:** every Windows-path step in the `dbmaestro-cicd` templates (`build-from-source`, `precheck-package`, `create-package`, `detect-packages`, `tag-package`, `get-cli-jar`, `upgrade-environment`) hardcodes `pwsh: true` on its `PowerShell@2` task — that's baked into the shared templates, not something this workflow's own YAML controls, so it can't be worked around by switching the orchestrator's own steps to `powershell:` (Windows PowerShell 5.1). If `pwsh` is missing from an agent, install PowerShell 7+ (`winget install --id Microsoft.PowerShell` or the MSI from https://aka.ms/PSWindows) and **restart the Azure Pipelines agent service** afterward — the same PATH-caching gotcha covered for Azure CLI in section 7a applies here too.
 - The DBmaestro template calls in both pipelines are set to `useWindows: true`.
 - **Azure CLI (`az`) installed on the `dbmaestro-windows` agent(s).** The orchestrator's "Queue" steps call `az pipelines run`/`az pipelines runs show` directly, and `az extension add --name azure-devops` runs automatically on each invocation — but the base `az` executable itself must already be present. See section 7a if it isn't.
+- **Java installed on the `dbmaestro-windows` agent(s), with `java` on PATH.** The DBmaestro templates (`build-from-source`, `precheck-package`, `create-package`, `tag-package`) all shell out to `java -jar "$agentJarPath" ...` to run the DBmaestro CLI agent (`DBmaestroAgent.jar`). If Java isn't installed, or is installed but not on the PATH the agent service sees, every one of these steps fails immediately with something like `'java' is not recognized as an internal or external command` (or the equivalent `The term 'java' is not recognized...` in PowerShell). As with Azure CLI (section 7a), remember to **restart the Azure Pipelines agent service** after installing Java — a service started before the install won't pick up the new PATH.
 
 > **Naming heads-up:** there are two different "project" concepts in play, and they currently have different values. The orchestrator's `targetProject` variable (the actual **Azure DevOps** project pipelines 59/60 live in) is `'Example'`. The `projectName` parameter inside `build-source-control.yml`/`upgrade-environment.yml` (DBmaestro's own internal project concept, unrelated to ADO) defaults to `'Example-ADO'`. Worth double-checking these are supposed to differ before assuming it's a typo.
 
@@ -33,6 +49,8 @@ Commits on `example-ado-source-control` must follow this format:
 
 Example:  v1.0.1; TaskID: V1.0.1
 ```
+
+This format is generated automatically by the **DBmaestro Source Control** application — it isn't something you type by hand. The only thing required on your end is to specify the **TaskID** value in the tool at commit time; DBmaestro Source Control then builds the full commit message (version plus `TaskID:` segment) for you. If a commit is ever made outside that tool, or the TaskID field is left blank, the message won't match this format and the Build stage's extraction step will fail with "Could not find 'TaskID: <value>' ..." (see section 14).
 
 The value after `TaskID:` is extracted once, in the Build stage, and reused as `packageName` for the build and as `packageNames` for both the integration and production upgrades.
 
@@ -67,289 +85,11 @@ The original poll-until-complete logic is kept commented out directly under each
 
 ## 6. Pipeline file (`source-control-workflow.yml` in `example-ado-source-control`)
 
-```yaml
-# Full release workflow: triggered by every push to example-ado-source-control.
-#
-# 1. Build   - extracts TaskID from the commit message, queues (fire-and-forget)
-#              "Build and Precheck Package - Source Control" (pipeline 59).
-# 2. Gate    - Integration pre-approval  (Environment: Integration-pre-approval)
-# 3. Upgrade - queues (fire-and-forget) "Upgrade Environment" (pipeline 60)
-#              targeting the 'Integration' environment.
-# 4. Gate    - Integration post-approval (Environment: Integration-post-approval)
-# 5. Gate    - Production pre-approval   (Environment: Production-pre-approval)
-# 6. Upgrade - queues (fire-and-forget) pipeline 60 targeting 'Production'.
-# 7. Gate    - Production post-approval  (Environment: Production-post-approval) - finalizes.
-#
-# Each gate is a separate Azure DevOps Environment with a manual Approval check
-# configured in the ADO UI (Pipelines -> Environments). Swapping the approver
-# for any single gate never requires touching this file.
-#
-# NOTE - Windows agents:
-# All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
-# agents don't have bash on PATH by default. `pwsh` requires PowerShell 7+ to be
-# installed on the agent (already done on the dbmaestro-windows pool); if it's
-# ever missing, switch these steps to `powershell:` instead, which uses Windows
-# PowerShell 5.1 and needs no extra install, as a fallback.
-#
-# NOTE - fire-and-forget by design, not an oversight:
-# This organization has exactly 1 self-hosted parallel job and 0 granted
-# Microsoft-hosted parallel jobs (confirmed via TF/CI error when we tried
-# hosted pools). A job that queues a downstream pipeline and then polls it
-# in a loop would hold the only available slot for the entire duration,
-# so the downstream pipeline could never start - permanent deadlock.
-#
-# The fix: every "queue" step below only queues the downstream pipeline and
-# exits immediately, releasing the slot so the downstream run can actually
-# use it. There is deliberately NO automatic pass/fail check here anymore -
-# that responsibility now falls to whoever approves the NEXT gate:
-#   - Before approving, check that the pipeline just queued actually
-#     succeeded (the Runs list, or the failure-notification email already
-#     configured for pipeline 59/60).
-#   - If it failed, REJECT the gate instead of approving it, to stop the
-#     workflow here rather than letting it continue against a broken build.
-# Approval gates themselves cost nothing while pending (no agent, no slot),
-# which is what makes this safe with only one parallel job.
-#
-# Commit message format expected: "<version>; TaskID: <value>"
-#   e.g. "v1.0.1; TaskID: V1.0.1"
+The orchestrator's full YAML is kept as a local reference copy in this repo rather than duplicated inline here, so it can't drift out of sync with the README:
 
-trigger:
-  branches:
-    include:
-      - main
+[`example-ado-source-control/source-control-workflow.yml`](./example-ado-source-control/source-control-workflow.yml)
 
-variables:
-  targetOrganization: 'https://dev.azure.com/dbmsc'
-  targetProject: 'Example'
-  buildPipelineId: '59'     # Build and Precheck Package - Source Control
-  upgradePipelineId: '60'   # Upgrade Environment
-  downstreamRunnerPool: 'dbmaestro-windows'   # agent pool pipelines 59/60 should run on
-
-stages:
-  # ------------------------------------------------------------------
-  - stage: Build
-    displayName: 'Build Package from Commit'
-    jobs:
-      - job: Build
-        pool: dbmaestro-windows
-        steps:
-          - checkout: self
-            fetchDepth: 1
-
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              $commitMessage = git log -1 --format='%s'
-              Write-Host "Message: $commitMessage"
-
-              # Extract the TaskID value: everything after "TaskID:" up to the next ';' or end of line
-              if ($commitMessage -match 'TaskID:\s*([^;]*)') {
-                $taskId = $matches[1].Trim()
-              } else {
-                $taskId = ""
-              }
-
-              if ([string]::IsNullOrWhiteSpace($taskId)) {
-                Write-Host "##vso[task.logissue type=error]Could not find 'TaskID: <value>' in commit message: $commitMessage"
-                exit 1
-              }
-
-              Write-Host "TaskID resolved: $taskId"
-              Write-Host "##vso[task.setvariable variable=packageName]$taskId"
-              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$taskId"
-            name: extract
-            displayName: 'Extract parameters from commit message'
-
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:SYSTEM_ACCESSTOKEN | az devops login --organization "$(targetOrganization)"
-
-              $runId = az pipelines run `
-                --organization "$(targetOrganization)" `
-                --project "$(targetProject)" `
-                --id "$(buildPipelineId)" `
-                --parameters packageName="$(packageName)" buildType="Specific Tasks" tasksList="$(packageName)" runnerPool="$(downstreamRunnerPool)" `
-                --query id -o tsv
-              Write-Host "Queued build run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: $(targetOrganization)/$(targetProject)/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of file. ---
-              # Kept here (commented out) so it's a one-line re-enable if this
-              # org ever gets a 2nd parallel job. Just uncomment and remove
-              # the Write-Host lines above (except the "Queued build run" one).
-              #
-              # do {
-              #   $state = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query result -o tsv
-              # Write-Host "Build run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Build failed (result=$result). See run $runId in pipeline $(buildPipelineId)."
-              #   exit 1
-              # }
-            displayName: 'Queue: Build with Source Control (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
-
-  # ------------------------------------------------------------------
-  - stage: IntegrationPreApproval
-    displayName: 'Integration - Pre-Approval Gate'
-    dependsOn: Build
-    condition: succeeded()
-    jobs:
-      - deployment: IntegrationPreApprovalGate
-        displayName: 'Await Integration pre-approval'
-        environment: 'Integration-pre-approval'
-        pool: dbmaestro-windows
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Integration pre-approval granted - proceeding to upgrade."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: UpgradeIntegration
-    displayName: 'Upgrade - Integration'
-    dependsOn:
-      - IntegrationPreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
-    condition: succeeded()
-    variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
-    jobs:
-      - job: UpgradeIntegration
-        pool: dbmaestro-windows
-        steps:
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:SYSTEM_ACCESSTOKEN | az devops login --organization "$(targetOrganization)"
-
-              $runId = az pipelines run `
-                --organization "$(targetOrganization)" `
-                --project "$(targetProject)" `
-                --id "$(upgradePipelineId)" `
-                --parameters targetEnvironment="Integration" packageNames="$(packageName)" runnerPool="$(downstreamRunnerPool)" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: $(targetOrganization)/$(targetProject)/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of file. ---
-              # do {
-              #   $state = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Integration upgrade failed (result=$result). See run $runId in pipeline $(upgradePipelineId)."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - Integration (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
-
-  # ------------------------------------------------------------------
-  - stage: IntegrationPostApproval
-    displayName: 'Integration - Post-Approval Gate'
-    dependsOn: UpgradeIntegration
-    condition: succeeded()
-    jobs:
-      - deployment: IntegrationPostApprovalGate
-        displayName: 'Confirm Integration upgrade'
-        environment: 'Integration-post-approval'
-        pool: dbmaestro-windows
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Integration upgrade confirmed."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: ProductionPreApproval
-    displayName: 'Production - Pre-Approval Gate'
-    dependsOn: IntegrationPostApproval
-    condition: succeeded()
-    jobs:
-      - deployment: ProductionPreApprovalGate
-        displayName: 'Await Production pre-approval'
-        environment: 'Production-pre-approval'
-        pool: dbmaestro-windows
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Production pre-approval granted - proceeding to upgrade."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: UpgradeProduction
-    displayName: 'Upgrade - Production'
-    dependsOn:
-      - ProductionPreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
-    condition: succeeded()
-    variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
-    jobs:
-      - job: UpgradeProduction
-        pool: dbmaestro-windows
-        steps:
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:SYSTEM_ACCESSTOKEN | az devops login --organization "$(targetOrganization)"
-
-              $runId = az pipelines run `
-                --organization "$(targetOrganization)" `
-                --project "$(targetProject)" `
-                --id "$(upgradePipelineId)" `
-                --parameters targetEnvironment="Production" packageNames="$(packageName)" runnerPool="$(downstreamRunnerPool)" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: $(targetOrganization)/$(targetProject)/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of file. ---
-              # do {
-              #   $state = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show --organization "$(targetOrganization)" --project "$(targetProject)" --id "$runId" --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Production upgrade failed (result=$result). See run $runId in pipeline $(upgradePipelineId)."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - Production (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
-
-  # ------------------------------------------------------------------
-  - stage: ProductionPostApproval
-    displayName: 'Production - Post-Approval Gate (Finalize)'
-    dependsOn: UpgradeProduction
-    condition: succeeded()
-    jobs:
-      - deployment: ProductionPostApprovalGate
-        displayName: 'Finalize workflow'
-        environment: 'Production-post-approval'
-        pool: dbmaestro-windows
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Production upgrade confirmed. Workflow complete."
-                  displayName: 'Gate passed'
-```
+The live version that Azure DevOps actually runs lives in the `example-ado-source-control` GitHub repo — this local copy exists purely so the full pipeline is easy to review alongside this runbook; keep the two in sync when either changes.
 
 ## 7. Add the dbmaestro-cicd service connection
 
@@ -412,7 +152,7 @@ Then **restart the Azure Pipelines agent service** (or reboot the machine). Wind
 
 This creates the orchestrator pipeline in the same `dbmsc`/`Example` project as pipelines 59 and 60.
 
-## 9. Grant permissions to queue pipelines 59 and 60
+## 9. Grant permissions to queue the build and upgrade pipelines (59 and 60 in this example)
 
 The orchestrator runs as the project's build service identity (e.g. `Example Build Service (dbmsc)` — the exact name follows the pattern `<project> Build Service (<org>)`), which needs explicit rights on both target pipelines to queue them with custom parameters. Without this, runs fail with `TF215106` access-denied errors.
 
@@ -469,7 +209,7 @@ To resolve it:
 
 Until it's permitted, the stage sits waiting on this authorization screen and never even reaches the Approval check — so if a gate seems stuck, check for this prompt before assuming the Approval check itself is misconfigured.
 
-## 11. Failure notifications (pipeline 59)
+## 11. Failure notifications (build pipeline — 59 in this example)
 
 Azure DevOps' built-in notification subscriptions email a distribution list whenever pipeline 59 fails — no SMTP or pipeline code involved.
 
@@ -484,7 +224,7 @@ Consider adding an equivalent subscription filtered to `Upgrade Environment` (de
 
 ## 12. Test
 
-1. Push a commit to `example-ado-source-control` with a message such as: `v1.0.2; TaskID: TASK-42`
+1. Using DBmaestro Source Control application, commit to `example-ado-source-control` with a message such as: `v1.0.2; TaskID: TASK-42`
 2. Confirm the orchestrator starts, the Build stage extracts `TASK-42`, and pipeline 59 is queued.
 3. Check pipeline 59's run and confirm it succeeded before proceeding.
 4. At the Integration pre-approval gate, approve the pending check in the ADO UI (Pipelines → the run → the pending environment approval).
@@ -494,7 +234,7 @@ Consider adding an equivalent subscription filtered to `Upgrade Environment` (de
 8. Confirm the Upgrade (Production) stage queues pipeline 60 with `targetEnvironment=Production` and `packageNames=TASK-42`; check that run succeeded.
 9. Approve the Production post-approval gate and confirm the run completes successfully.
 
-## 13. Friendly run names for pipelines 59 and 60
+## 13. Friendly run names for the build and upgrade pipelines (59 and 60 in this example)
 
 By default, Azure DevOps run names show a generic build number like `#20260727.2` alongside whatever the latest commit message happens to be on that pipeline's own source repo — not necessarily anything meaningful. Both target pipelines set a custom build number format so each run in the ADO UI immediately shows what it's building:
 
@@ -509,8 +249,10 @@ Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject
 |---|---|
 | `ERROR: Repository dbmaestro-cicd references endpoint dbmaestro-cicd which does not exist or is not authorized for use` | The `dbmaestro-cicd` GitHub service connection doesn't exist in this project (or isn't authorized), or its name doesn't exactly match the `endpoint:` value (check for typos) — see step 7. |
 | `##[error]No hosted parallelism has been purchased or granted` | This org has 0 Microsoft-hosted parallel jobs. Don't switch pools to a `vmImage` — use the self-hosted `dbmaestro-windows` pool already configured everywhere, and rely on the fire-and-forget design (section 5a). |
-| `##[error]Unable to locate executable file: 'bash'` | The agent is Windows and has no bash on PATH. All steps in these three files use `pwsh:` (or `powershell:` as a fallback) instead of `bash:` for exactly this reason — if you still see this, a step somewhere is still using `bash:`. |
+| `##[error]Unable to locate executable file: 'bash'` | The agent is Windows and has no bash on PATH. All steps in these three files use `pwsh:` instead of `bash:` for exactly this reason — if you still see this, a step somewhere is still using `bash:`. `powershell:` (Windows PowerShell 5.1) is not a substitute here: the `dbmaestro-cicd` templates hardcode `pwsh: true`, so PowerShell 7+ must actually be installed (section 3) — see also the next row. |
+| `##[error]'pwsh' task detected. This task requires PowerShell version >= 6 and PowerShell not found on specified path` (or agent errors resolving `pwsh`) | PowerShell 7+ isn't installed on the agent, or the agent service was never restarted after installing it. This isn't optional/fallback-able — every Windows-path step in the `dbmaestro-cicd` templates hardcodes `pwsh: true` — see section 3. |
 | `az : The term 'az' is not recognized as the name of a cmdlet, function, script file, or operable program.` | Azure CLI isn't installed on the agent (or the agent service was never restarted after installing it) — see section 7a. |
+| `java : The term 'java' is not recognized as the name of a cmdlet, function, script file, or operable program.` | Java isn't installed on the agent, or isn't on the PATH the agent service sees (or the agent service was never restarted after installing it) — see section 3. Every DBmaestro template step (`build-from-source`, `precheck-package`, `create-package`, `tag-package`) needs `java` to run `DBmaestroAgent.jar`. |
 | Build number generation fails with "contains invalid character(s)" mentioning `:` | A custom `name:` format included a literal colon (e.g. `TaskID: X`). Build numbers can't contain `"`, `/`, `:`, `<`, `>`, `\`, `|`, `?`, `@`, or `*` — use a dash or space instead (see section 13). |
 | `TF215106: ... needs Queue builds permissions for build pipeline 59/60 ...` | Grant Queue builds = Allow to the project's Build Service identity on that pipeline's Security panel (see step 9). |
 | `TF215106: ... needs Edit queue build configuration permissions ...` | Grant Edit queue build configuration = Allow to the same identity on the same Security panel. |
