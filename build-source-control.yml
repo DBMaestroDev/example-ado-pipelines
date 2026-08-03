@@ -7,7 +7,9 @@ resources:
       type: github
       name: DBMaestroDev/dbmaestro-cicd
       endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
-      ref: refs/tags/v1
+      ref: refs/heads/UseSSL_False
+
+#      ref: refs/tags/v1
 
 parameters:
   - name: packageName
@@ -131,6 +133,6 @@ stages:
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
               password: $(DBMAESTRO_PASSWORD)
-              useSsl: 'True'
+              useSsl: 'False'
               authType: 'DBmaestroAccount'
               useWindows: true
