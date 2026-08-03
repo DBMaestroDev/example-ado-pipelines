@@ -131,6 +131,6 @@ stages:
               server: $(DBMAESTRO_SERVER)
               user: $(DBMAESTRO_USER)
               password: $(DBMAESTRO_PASSWORD)
-              useSsl: 'False'
+              useSsl: 'True'
               authType: 'DBmaestroAccount'
               useWindows: true
