@@ -158,7 +158,19 @@ stages:
     # this push didn't actually touch a recognized package under
     # packagesFolder - e.g. a change to some other file that still happens to
     # be under the ad-hoc/ path filter but outside any package's own folder.
-    condition: and(succeeded(), eq(stageDependencies.Build.Build.outputs['detectPackages.has_packages'], 'true'))
+    #
+    # NOTE: a STAGE's own `condition:` uses a different expression context
+    # than a JOB's `variables:` block (see UpgradeIntegration/UpgradeProduction
+    # below). In a job's `variables:`, cross-stage output lookup is
+    # `stageDependencies.<Stage>.<Job>.outputs['<Step>.<Var>']`. In a STAGE
+    # condition it's `dependencies.<Stage>.outputs['<Job>.<Step>.<Var>']`
+    # instead - job name moves inside the outputs key, and the prefix is
+    # `dependencies`, not `stageDependencies`. Using the wrong one here
+    # doesn't error - it just silently resolves to Null, so
+    # eq(Null, 'true') is always False and this stage (and everything
+    # depending on it) gets skipped even when Build genuinely succeeded and
+    # found packages. Confirmed the hard way via a live run.
+    condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
     jobs:
       - deployment: IntegrationPreApprovalGate
         displayName: 'Await Integration pre-approval'
