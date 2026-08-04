@@ -62,21 +62,10 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
-          # No self checkout, and no PR/branch-checkout logic here: this pipeline
-          # is queued via 'az pipelines run' (trigger: none), not triggered
-          # directly off example-ado-source-control, so there's no PR context to
-          # read - the checkout above always gets exampleAdoSourceControl's
-          # 'main' (per the ref: on the repository resource), and detection
-          # compares against baseBranch below.
-          - bash: |
-              echo "##vso[task.setvariable variable=resolvedIsPr]false"
-              echo "##vso[task.setvariable variable=resolvedBaseRef]${{ parameters.baseBranch }}"
-            displayName: 'Resolve Detection Parameters'
-
           - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
             parameters:
-              isPullRequest: $(resolvedIsPr)
-              baseRef: $(resolvedBaseRef)
+              isPullRequest: false
+              baseRef: ${{ parameters.baseBranch }}
               detectFromPush: false
               useWindows: true
               sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
