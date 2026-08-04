@@ -1,4 +1,4 @@
-﻿# Example: Build with Git Change Detection (Azure DevOps)
+# Example: Build with Git Change Detection (Azure DevOps)
 # Detects which packages changed in the current branch or PR diff and builds them.
 resources:
   repositories:
