@@ -12,6 +12,12 @@
 # every repo lands in a subfolder of $(Build.SourcesDirectory) named after its
 # actual repository name (DBMaestroDev/example-ado-source-control -> folder
 # "example-ado-source-control"), not the `repository:` alias declared below.
+#
+# packageNames parameter: when a caller (e.g. ad-hoc-workflow.yml) has already
+# run its own git-diff detection, it can pass the result straight in via
+# packageNames, which skips the Detect stage here entirely rather than
+# detecting the same push twice. Leave packageNames empty for a standalone/
+# manual run of this pipeline, and it detects changes itself as before.
 resources:
   repositories:
     - repository: dbmaestro-cicd
@@ -33,6 +39,10 @@ parameters:
   - name: packagesFolder
     type: string
     default: 'ad-hoc'
+  - name: packageNames
+    displayName: 'Comma-separated package names to build directly (optional). When set, the Detect stage is skipped entirely - use this when the caller has already run its own git-diff detection (e.g. ad-hoc-workflow.yml) and knows exactly what changed, so detection is not redundantly run twice. Leave empty to have this pipeline detect changes itself (e.g. for a manual/standalone run).'
+    type: string
+    default: ''
   - name: agentJarPath
     type: string
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
@@ -54,90 +64,95 @@ parameters:
 trigger: none
 
 stages:
-  - stage: Detect
-    displayName: 'Detect Changed Packages'
-    jobs:
-      - job: DetectChanges
+  # Skipped entirely when the caller already passed packageNames - see that
+  # parameter's description above. Everything below down to the Build stage
+  # stays inside this ${{ if }} block for exactly that reason.
+  - ${{ if eq(parameters.packageNames, '') }}:
+      - stage: Detect
         displayName: 'Detect Changed Packages'
-        pool: ${{ parameters.runnerPool }}
-        steps:
-          # No fetchDepth here - omitting it entirely is what actually gets
-          # full history for this repository resource. Explicit fetchDepth: 0
-          # is *documented* to also mean "full history", but for this GitHub
-          # resource type it was observed to still only fetch 1 commit either
-          # way - with fetchDepth: 0 AND with it omitted entirely ("fatal:
-          # ambiguous argument 'HEAD~1': unknown revision"). This looks like a
-          # hard shallow-checkout behavior for this resource type regardless
-          # of the setting, not something fetchDepth actually controls here -
-          # see the explicit `git fetch --unshallow` step below, which is the
-          # real fix, not just a fallback.
-          #
-          # Confirmed via the DEBUG step below: self (example-ado-pipelines) is
-          # checked out automatically even with no explicit `checkout: self`
-          # step, and every repo (including this one) lands in a subfolder of
-          # $(Build.SourcesDirectory) named after the repository's actual name
-          # (the basename of `name:` above) - NOT the `repository:` alias used
-          # for the checkout step/template refs. That's why sourcesPath below
-          # is ".../example-ado-source-control", not ".../exampleAdoSourceControl".
-          - checkout: exampleAdoSourceControl
-            persistCredentials: true   # needed so the later 'git fetch --unshallow'
-                                        # step below can authenticate - checkout
-                                        # credentials aren't persisted to later
-                                        # steps by default, and without this the
-                                        # fetch fails with "terminal prompts disabled"
+        jobs:
+          - job: DetectChanges
+            displayName: 'Detect Changed Packages'
+            pool: ${{ parameters.runnerPool }}
+            steps:
+              # No fetchDepth here - omitting it entirely is what actually gets
+              # full history for this repository resource. Explicit fetchDepth: 0
+              # is *documented* to also mean "full history", but for this GitHub
+              # resource type it was observed to still only fetch 1 commit either
+              # way - with fetchDepth: 0 AND with it omitted entirely ("fatal:
+              # ambiguous argument 'HEAD~1': unknown revision"). This looks like a
+              # hard shallow-checkout behavior for this resource type regardless
+              # of the setting, not something fetchDepth actually controls here -
+              # see the explicit `git fetch --unshallow` step below, which is the
+              # real fix, not just a fallback.
+              #
+              # Confirmed via the DEBUG step below: self (example-ado-pipelines) is
+              # checked out automatically even with no explicit `checkout: self`
+              # step, and every repo (including this one) lands in a subfolder of
+              # $(Build.SourcesDirectory) named after the repository's actual name
+              # (the basename of `name:` above) - NOT the `repository:` alias used
+              # for the checkout step/template refs. That's why sourcesPath below
+              # is ".../example-ado-source-control", not ".../exampleAdoSourceControl".
+              - checkout: exampleAdoSourceControl
+                persistCredentials: true   # needed so the later 'git fetch --unshallow'
+                                            # step below can authenticate - checkout
+                                            # credentials aren't persisted to later
+                                            # steps by default, and without this the
+                                            # fetch fails with "terminal prompts disabled"
 
-          - checkout: dbmaestro-cicd
-            fetchDepth: 1
+              - checkout: dbmaestro-cicd
+                fetchDepth: 1
 
-          # This is the actual fix for the shallow-checkout behavior noted
-          # above, not just a defensive fallback: force full history so
-          # HEAD~1 resolves for the detectFromPush diff below. --unshallow
-          # errors harmlessly ("does not make sense") if the repo already has
-          # full history, so this is safe to always run regardless.
-          - pwsh: |
-              Set-Location "$(Build.SourcesDirectory)/example-ado-source-control"
-              git fetch --unshallow 2>&1 | Write-Host
-              $LASTEXITCODE = 0
-              Write-Host "Commit count after unshallow: $(git rev-list --count HEAD)"
-            displayName: 'Ensure full git history is available for diff'
+              # This is the actual fix for the shallow-checkout behavior noted
+              # above, not just a defensive fallback: force full history so
+              # HEAD~1 resolves for the detectFromPush diff below. --unshallow
+              # errors harmlessly ("does not make sense") if the repo already has
+              # full history, so this is safe to always run regardless.
+              - pwsh: |
+                  Set-Location "$(Build.SourcesDirectory)/example-ado-source-control"
+                  git fetch --unshallow 2>&1 | Write-Host
+                  $LASTEXITCODE = 0
+                  Write-Host "Commit count after unshallow: $(git rev-list --count HEAD)"
+                displayName: 'Ensure full git history is available for diff'
 
-          # DEBUG: print where things actually landed, to confirm/adjust the
-          # sourcesPath assumption below. Safe to remove once checkout layout
-          # is confirmed stable.
-          - pwsh: |
-              Write-Host "Build.SourcesDirectory = $(Build.SourcesDirectory)"
-              Write-Host "--- Contents of Build.SourcesDirectory ---"
-              Get-ChildItem -Force "$(Build.SourcesDirectory)" | Select-Object Name, Mode | Format-Table | Out-String | Write-Host
-              Write-Host "--- Current location ---"
-              Get-Location
-            displayName: 'DEBUG: List checkout contents'
+              # DEBUG: print where things actually landed, to confirm/adjust the
+              # sourcesPath assumption below. Safe to remove once checkout layout
+              # is confirmed stable.
+              - pwsh: |
+                  Write-Host "Build.SourcesDirectory = $(Build.SourcesDirectory)"
+                  Write-Host "--- Contents of Build.SourcesDirectory ---"
+                  Get-ChildItem -Force "$(Build.SourcesDirectory)" | Select-Object Name, Mode | Format-Table | Out-String | Write-Host
+                  Write-Host "--- Current location ---"
+                  Get-Location
+                displayName: 'DEBUG: List checkout contents'
 
-          # detectFromPush (not baseRef) is the correct mode here: this checkout
-          # is always 'main' itself (the ref: on the repository resource above),
-          # so comparing it against "origin/main" would just be main vs. main -
-          # always empty, even ignoring that the ref may not resolve at all in
-          # this checkout. detectFromPush instead diffs HEAD~1 vs HEAD, i.e.
-          # exactly the commit that made ad-hoc-workflow.yml queue this run.
-          - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
-            parameters:
-              detectFromPush: true
-              useWindows: true
-              sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
-              # Must match the Build stage's packagesFolder below (both default
-              # to 'ad-hoc') - detect-packages.ps1/.sh match changed files as
-              # "<packagesFolder>/<packageName>/...", so if these two ever
-              # diverge, detection silently finds nothing even though files
-              # genuinely changed (this is exactly what happened when the
-              # template still hardcoded "packages/" - see dbmaestro-cicd).
-              packagesFolder: ${{ parameters.packagesFolder }}
+              # detectFromPush (not baseRef) is the correct mode here: this checkout
+              # is always 'main' itself (the ref: on the repository resource above),
+              # so comparing it against "origin/main" would just be main vs. main -
+              # always empty, even ignoring that the ref may not resolve at all in
+              # this checkout. detectFromPush instead diffs HEAD~1 vs HEAD, i.e.
+              # exactly the commit that made ad-hoc-workflow.yml queue this run.
+              - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
+                parameters:
+                  detectFromPush: true
+                  useWindows: true
+                  sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
+                  # Must match the Build stage's packagesFolder below (both default
+                  # to 'ad-hoc') - detect-packages.ps1/.sh match changed files as
+                  # "<packagesFolder>/<packageName>/...", so if these two ever
+                  # diverge, detection silently finds nothing even though files
+                  # genuinely changed (this is exactly what happened when the
+                  # template still hardcoded "packages/" - see dbmaestro-cicd).
+                  packagesFolder: ${{ parameters.packagesFolder }}
 
   - stage: Build
     displayName: 'Build Changed Packages'
-    dependsOn: Detect
+    ${{ if eq(parameters.packageNames, '') }}:
+      dependsOn: Detect
     jobs:
       - template: azure-devops/templates/build-multiple-packages.yml@dbmaestro-cicd
         parameters:
-          packageNames: ''
+          packageNames: ${{ parameters.packageNames }}
           projectName: ${{ parameters.projectName }}
           packagesFolder: ${{ parameters.packagesFolder }}
           agentJarPath: ${{ parameters.agentJarPath }}

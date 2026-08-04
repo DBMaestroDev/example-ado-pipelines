@@ -1,21 +1,18 @@
-# Ad-hoc package build: triggered by pushes to example-ado-source-control that
-# touch files under the 'ad-hoc/' folder.
+# Ad-hoc package build: triggered by pushes to this repo that touch files
+# under the 'ad-hoc/' folder.
 #
-# This is intentionally build-only - unlike source-control-workflow.yml, there
-# is no Integration/Production upgrade chain or approval gates here. A push
-# under ad-hoc/ just queues the "Build with Git Change Detection" pipeline
-# (definition ID 62, code: build-git-changes.yml in example-ado-pipelines) and
-# is done. Add gates later if ad-hoc packages ever need the same promotion
-# workflow as the main release pipeline.
+# This file is intentionally thin. Azure DevOps requires a self-triggered
+# pipeline's YAML to live in the same repo whose pushes trigger it, so this
+# file has to exist here even though all its real logic lives in exactly one
+# place: azure-devops/templates/ad-hoc-workflow.yml in the example-ado-pipelines
+# repo, `extends:`-ed below. That template is shared by every source-control
+# repo that needs this same ad-hoc release chain - if there's more than one
+# source-control repo, each of the others gets an equally thin copy of this
+# file (same shape, its own parameter values below). Any bug fix or change to
+# the chain itself happens once, in that one template - not copy-pasted here.
 #
-# Fire-and-forget, same rationale as source-control-workflow.yml (see that
-# file's NOTE comments): this org has only 1 self-hosted parallel job, so
-# queuing and then polling for completion would deadlock. This step just
-# queues pipeline 62 and exits - check the run yourself via the printed URL.
-#
-# No TaskID extraction here: pipeline 62 does its own git-diff based package
-# detection against its `baseBranch` parameter (default 'main') - it doesn't
-# need anything parsed from the commit message the way pipeline 59 does.
+# See that template for the full Build -> approvals -> upgrades chain and its
+# design notes (git-diff detection, fire-and-forget queuing, etc.)
 
 trigger:
   branches:
@@ -25,39 +22,28 @@ trigger:
     include:
       - ad-hoc/*
 
-variables:
-  targetOrganization: 'https://dev.azure.com/dbmsc'
-  targetProject: 'Example'
-  adHocBuildPipelineId: '62'   # Build with Git Change Detection
-  downstreamRunnerPool: 'dbmaestro-windows'
+resources:
+  repositories:
+    - repository: dbmaestro-cicd
+      type: github
+      name: DBMaestroDev/dbmaestro-cicd
+      endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
+      ref: refs/heads/UseSSL_False
+    - repository: adoPipelines
+      type: github
+      name: DBMaestroDev/example-ado-pipelines
+      endpoint: 'DBMaestroDev'  # must match the service connection name exactly - reuses the
+                                 # same GitHub connection used elsewhere in this org for
+                                 # example-ado-source-control; if that connection isn't scoped
+                                 # to this repo too, register a separate one and update this.
+      ref: refs/heads/main
 
-stages:
-  - stage: Build
-    displayName: 'Build Ad-Hoc Package(s) from Git Changes'
-    jobs:
-      - job: Build
-        pool: dbmaestro-windows
-        steps:
-          - checkout: self
-            fetchDepth: 1
-
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              # Authenticate via env var rather than piping into 'az devops login' -
-              # on Windows, 'az' is a .cmd wrapper, and piping a token into it from
-              # PowerShell unreliably loses the stdin content across that wrapper.
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              $runId = az pipelines run `
-                --organization "$(targetOrganization)" `
-                --project "$(targetProject)" `
-                --id "$(adHocBuildPipelineId)" `
-                --parameters runnerPool="$(downstreamRunnerPool)" `
-                --query id -o tsv
-              Write-Host "Queued ad-hoc build run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
-              Write-Host "Check run status: $(targetOrganization)/$(targetProject)/_build/results?buildId=$runId"
-            displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+extends:
+  template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
+  parameters:
+    packagesFolder: 'ad-hoc'
+    targetOrganization: 'https://dev.azure.com/dbmsc'
+    targetProject: 'Example'
+    adHocBuildPipelineId: '62'   # this repo's "Build with Git Change Detection" pipeline
+    upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
+    runnerPool: 'dbmaestro-windows'

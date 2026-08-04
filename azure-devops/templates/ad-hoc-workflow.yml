@@ -1,0 +1,285 @@
+# Reusable "ad-hoc release" pipeline template.
+#
+# Why this exists: an Azure DevOps pipeline that self-triggers on pushes to a
+# repo (this one does, on changes under `ad-hoc/`) must have its trigger YAML
+# physically committed in that same repo - ADO won't self-trigger off a file
+# living somewhere else. With multiple source-control repos sharing this one
+# ado-pipelines repo, that would normally mean copy-pasting this entire
+# 7-stage release chain into every source-control repo and re-fixing bugs in
+# N places. Splitting it into an `extends` template here means each
+# source-control repo only needs a thin wrapper file (trigger + resources +
+# an `extends:` block with a handful of parameters) - all real logic and any
+# future fix lives in exactly one place, in this one ado-pipelines repo.
+# See azure-devops/templates/ad-hoc-workflow.yml usage comment for the
+# wrapper's exact shape.
+#
+# Chain: Build (git-diff detect + queue) -> Integration pre-approval ->
+# Upgrade Integration -> Integration post-approval -> Production
+# pre-approval -> Upgrade Production -> Production post-approval. Mirrors
+# source-control-workflow.yml's chain; see that file's NOTE comments for the
+# fire-and-forget/1-parallel-job rationale, which applies identically here.
+#
+# Key difference from source-control-workflow.yml: there's no TaskID to
+# extract from a commit message. Instead, the Build stage below runs its own
+# git-diff based package detection (the same dbmaestro-cicd
+# detect-packages.yml template used internally by the per-repo "Build with
+# Git Change Detection" pipeline) to determine which package(s) changed, then
+# passes that result directly to that pipeline via its packageNames
+# parameter - see build-git-changes.yml's packageNames parameter comment.
+# This avoids detecting the same push twice (once here, once inside that
+# pipeline), which is the whole point of doing detection in this workflow at
+# all rather than leaving it entirely to the downstream pipeline.
+#
+# Self-checkout path is resolved dynamically at runtime from
+# $(Build.Repository.Name) rather than hardcoded, since this template is
+# reused across source-control repos with different names - see the first
+# step of the Build stage below.
+
+parameters:
+  - name: packagesFolder
+    displayName: 'Root folder that ad-hoc packages live under in this repo'
+    type: string
+    default: 'ad-hoc'
+  - name: targetOrganization
+    displayName: 'Azure DevOps organization URL that hosts the downstream pipelines'
+    type: string
+  - name: targetProject
+    displayName: 'Azure DevOps project that hosts the downstream pipelines'
+    type: string
+  - name: adHocBuildPipelineId
+    displayName: 'Pipeline ID of this repo''s "Build with Git Change Detection" pipeline (built from build-git-changes.yml)'
+    type: string
+  - name: upgradePipelineId
+    displayName: 'Pipeline ID of the shared "Upgrade Environment" pipeline'
+    type: string
+  - name: runnerPool
+    displayName: 'Agent pool for both this workflow''s own jobs and the downstream pipelines it queues'
+    type: string
+    default: 'dbmaestro-windows'
+  - name: integrationPreApprovalEnvironment
+    type: string
+    default: 'Integration-pre-approval'
+  - name: integrationPostApprovalEnvironment
+    type: string
+    default: 'Integration-post-approval'
+  - name: productionPreApprovalEnvironment
+    type: string
+    default: 'Production-pre-approval'
+  - name: productionPostApprovalEnvironment
+    type: string
+    default: 'Production-post-approval'
+
+stages:
+  # ------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Detect and Build Ad-Hoc Package(s) from Git Changes'
+    jobs:
+      - job: Build
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          # This job checks out two repos (self + dbmaestro-cicd), which
+          # switches self from the single-repo "root" checkout location into
+          # the multi-repo nested layout - every repo (including self) lands
+          # in $(Build.SourcesDirectory)/<repo-name>, confirmed empirically
+          # in build-git-changes.yml's DEBUG step. Since this template is
+          # reused across source-control repos with different names, that
+          # folder name is resolved at RUNTIME below from
+          # $(Build.Repository.Name) (basename only - that variable returns
+          # "Org/Repo" for GitHub, and the checkout folder is just "Repo")
+          # rather than hardcoded, and stashed in $(selfSourcesPath) for the
+          # rest of this job to use.
+          - checkout: self
+            persistCredentials: true   # needed so the 'git fetch --unshallow'
+                                        # step below can authenticate - checkout
+                                        # credentials aren't persisted to later
+                                        # steps by default
+
+          - checkout: dbmaestro-cicd
+            fetchDepth: 1
+
+          # Force full history so HEAD~1 resolves for the detectFromPush diff
+          # below. fetchDepth: 0 was observed unreliable for a similarly-typed
+          # checkout in build-git-changes.yml (still only 1 commit either way)
+          # - --unshallow errors harmlessly if history is already complete, so
+          # this is safe to always run regardless.
+          - pwsh: |
+              $selfFolder = ("$(Build.Repository.Name)" -split '/')[-1]
+              $selfPath = Join-Path "$(Build.SourcesDirectory)" $selfFolder
+              Write-Host "Resolved self checkout path: $selfPath"
+              Write-Host "##vso[task.setvariable variable=selfSourcesPath]$selfPath"
+
+              Set-Location $selfPath
+              git fetch --unshallow 2>&1 | Write-Host
+              $LASTEXITCODE = 0
+            displayName: 'Resolve self checkout path & ensure full git history'
+
+          # detectFromPush diffs HEAD~1 vs HEAD, i.e. exactly the commit that
+          # triggered this run - see source-control-workflow.yml's Build stage
+          # for why baseRef/origin-branch comparison doesn't work here.
+          - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
+            parameters:
+              detectFromPush: true
+              useWindows: true
+              sourcesPath: '$(selfSourcesPath)'
+              packagesFolder: '${{ parameters.packagesFolder }}'
+
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              # Only forward a real package list. detect-packages.ps1 sets
+              # packages_list to the literal string "None" when nothing was
+              # found - passing that straight through would make the
+              # downstream build pipeline try to build a package literally
+              # named "None". Pass empty instead, which its own packageNames
+              # handling already treats as "nothing to build" gracefully.
+              $hasPackages = "$(detectPackages.has_packages)"
+              $pkgNames = if ($hasPackages -eq "true") { "$(detectPackages.packages_list)" } else { "" }
+
+              $runId = az pipelines run `
+                --organization "${{ parameters.targetOrganization }}" `
+                --project "${{ parameters.targetProject }}" `
+                --id "${{ parameters.adHocBuildPipelineId }}" `
+                --parameters packageNames="$pkgNames" runnerPool="${{ parameters.runnerPool }}" `
+                --query id -o tsv
+              Write-Host "Queued ad-hoc build run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+            displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # ------------------------------------------------------------------
+  - stage: IntegrationPreApproval
+    displayName: 'Integration - Pre-Approval Gate'
+    dependsOn: Build
+    # Skips the whole rest of the chain (no dangling approval request) when
+    # this push didn't actually touch a recognized package under
+    # packagesFolder - e.g. a change to some other file that still happens to
+    # be under the ad-hoc/ path filter but outside any package's own folder.
+    condition: and(succeeded(), eq(stageDependencies.Build.Build.outputs['detectPackages.has_packages'], 'true'))
+    jobs:
+      - deployment: IntegrationPreApprovalGate
+        displayName: 'Await Integration pre-approval'
+        environment: ${{ parameters.integrationPreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Integration pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeIntegration
+    displayName: 'Upgrade - Integration'
+    dependsOn:
+      - IntegrationPreApproval
+      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    condition: succeeded()
+    variables:
+      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
+    jobs:
+      - job: UpgradeIntegration
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              $runId = az pipelines run `
+                --organization "${{ parameters.targetOrganization }}" `
+                --project "${{ parameters.targetProject }}" `
+                --id "${{ parameters.upgradePipelineId }}" `
+                --parameters targetEnvironment="Integration" packageNames="$(packageNames)" runnerPool="${{ parameters.runnerPool }}" `
+                --query id -o tsv
+              Write-Host "Queued upgrade run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+            displayName: 'Queue: Upgrade Environment - Integration (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # ------------------------------------------------------------------
+  - stage: IntegrationPostApproval
+    displayName: 'Integration - Post-Approval Gate'
+    dependsOn: UpgradeIntegration
+    condition: succeeded()
+    jobs:
+      - deployment: IntegrationPostApprovalGate
+        displayName: 'Confirm Integration upgrade'
+        environment: ${{ parameters.integrationPostApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Integration upgrade confirmed."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: ProductionPreApproval
+    displayName: 'Production - Pre-Approval Gate'
+    dependsOn: IntegrationPostApproval
+    condition: succeeded()
+    jobs:
+      - deployment: ProductionPreApprovalGate
+        displayName: 'Await Production pre-approval'
+        environment: ${{ parameters.productionPreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Production pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeProduction
+    displayName: 'Upgrade - Production'
+    dependsOn:
+      - ProductionPreApproval
+      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    condition: succeeded()
+    variables:
+      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
+    jobs:
+      - job: UpgradeProduction
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              $runId = az pipelines run `
+                --organization "${{ parameters.targetOrganization }}" `
+                --project "${{ parameters.targetProject }}" `
+                --id "${{ parameters.upgradePipelineId }}" `
+                --parameters targetEnvironment="Production" packageNames="$(packageNames)" runnerPool="${{ parameters.runnerPool }}" `
+                --query id -o tsv
+              Write-Host "Queued upgrade run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+            displayName: 'Queue: Upgrade Environment - Production (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # ------------------------------------------------------------------
+  - stage: ProductionPostApproval
+    displayName: 'Production - Post-Approval Gate (Finalize)'
+    dependsOn: UpgradeProduction
+    condition: succeeded()
+    jobs:
+      - deployment: ProductionPostApprovalGate
+        displayName: 'Finalize workflow'
+        environment: ${{ parameters.productionPostApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Production upgrade confirmed. Workflow complete."
+                  displayName: 'Gate passed'
