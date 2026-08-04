@@ -51,6 +51,12 @@ trigger:
   branches:
     include:
       - main
+  paths:
+    exclude:
+      - ad-hoc/*   # ad-hoc/ changes are handled by ad-hoc-workflow.yml instead -
+                   # excluded here so an ad-hoc-only commit doesn't also trigger
+                   # this workflow and fail at TaskID extraction (ad-hoc commits
+                   # don't follow the "<version>; TaskID: <value>" convention).
 
 variables:
   targetOrganization: 'https://dev.azure.com/dbmsc'

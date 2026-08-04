@@ -1,20 +1,33 @@
-# Example: Build with Git Change Detection (Azure DevOps)
-# Detects which packages changed in the current branch or PR diff and builds them.
+﻿# Example: Build with Git Change Detection (Azure DevOps)
+# Detects which packages changed in the example-ado-source-control repo and builds them.
+#
+# Detection runs against example-ado-source-control, NOT this pipeline's own
+# self repo (example-ado-pipelines) - self only holds pipeline definitions,
+# not the ad-hoc/ package folder being diffed. example-ado-source-control is
+# checked out as a second repository resource below, same pattern as
+# dbmaestro-cicd, and both the Detect and Build stages are pointed at that
+# checkout path explicitly via sourcesPath/sourcesRepository parameters.
 resources:
   repositories:
     - repository: dbmaestro-cicd
       type: github
       name: DBMaestroDev/dbmaestro-cicd
       endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
-      ref: refs/tags/v1
+      ref: refs/heads/UseSSL_False
+      #ref: refs/tags/v1
+    - repository: exampleAdoSourceControl
+      type: github
+      name: DBMaestroDev/example-ado-source-control
+      endpoint: 'DBMaestroDev'  # must match the service connection name exactly
+      ref: refs/heads/main
 
 parameters:
   - name: projectName
     type: string
-    default: 'Demo-PSQL'
+    default: 'Example-ADO'
   - name: packagesFolder
     type: string
-    default: 'packages'
+    default: 'ad-hoc'
   - name: agentJarPath
     type: string
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
@@ -28,7 +41,7 @@ parameters:
   - name: tags
     displayName: 'Comma-separated tags to apply after build (optional, e.g., "TASK-123,TASK-456")'
     type: string
-    default: ''
+    default: 'none'
   - name: tagTypeName
     displayName: 'Tag type name'
     type: string
@@ -43,32 +56,21 @@ stages:
         displayName: 'Detect Changed Packages'
         pool: ${{ parameters.runnerPool }}
         steps:
-          - checkout: self
+          - checkout: exampleAdoSourceControl
             fetchDepth: 0
 
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
+          # No self checkout, and no PR/branch-checkout logic here: this pipeline
+          # is queued via 'az pipelines run' (trigger: none), not triggered
+          # directly off example-ado-source-control, so there's no PR context to
+          # read - the checkout above always gets exampleAdoSourceControl's
+          # 'main' (per the ref: on the repository resource), and detection
+          # compares against baseBranch below.
           - bash: |
-              if [ -n "$SYSTEM_PULLREQUEST_SOURCEBRANCH" ]; then
-                BRANCH="${SYSTEM_PULLREQUEST_SOURCEBRANCH#refs/heads/}"
-              else
-                BRANCH="$(Build.SourceBranchName)"
-              fi
-              git checkout "$BRANCH"
-            workingDirectory: $(Build.SourcesDirectory)
-
-          - bash: |
-              IS_PR="false"
-              BASE_REF="${{ parameters.baseBranch }}"
-
-              if [ -n "$SYSTEM_PULLREQUEST_TARGETBRANCH" ]; then
-                IS_PR="true"
-                BASE_REF="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
-              fi
-
-              echo "##vso[task.setvariable variable=resolvedIsPr]$IS_PR"
-              echo "##vso[task.setvariable variable=resolvedBaseRef]$BASE_REF"
+              echo "##vso[task.setvariable variable=resolvedIsPr]false"
+              echo "##vso[task.setvariable variable=resolvedBaseRef]${{ parameters.baseBranch }}"
             displayName: 'Resolve Detection Parameters'
 
           - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
@@ -77,6 +79,7 @@ stages:
               baseRef: $(resolvedBaseRef)
               detectFromPush: false
               useWindows: true
+              sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
 
   - stage: Build
     displayName: 'Build Changed Packages'
@@ -94,6 +97,8 @@ stages:
           packageType: 'AdHoc'
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
+          sourcesRepository: exampleAdoSourceControl
+          sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
           version: $(CLI_VERSION)

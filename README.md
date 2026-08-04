@@ -6,6 +6,8 @@
 
 On every commit to the `example-ado-source-control` GitHub repository, automatically: build a DBmaestro package, gate on manual approval, upgrade the integration environment, gate on manual confirmation, gate on manual approval again, upgrade the production environment, and gate on a final manual confirmation. Values are parsed from the commit message rather than entered by hand.
 
+There's a second, separate workflow covered later in this guide (section 14) for **ad-hoc** package builds: commits that only touch the `ad-hoc/` folder skip all of this — no TaskID convention, no approval gates, no environment upgrade — and instead just build whatever changed via git-diff detection.
+
 ## 2. Why a direct trigger doesn't work
 
 Azure Pipelines' repository resource trigger (`resources.repositories[].trigger`) only fires for Azure Repos Git repositories, never for GitHub (or Bitbucket) resources — a structural limitation independent of the service connection or auth method used.
@@ -23,6 +25,8 @@ The workaround is a pipeline whose own source repository is `example-ado-source-
 | DBmaestro project name (`projectName` parameter — a separate, unrelated concept, see naming heads-up below) | `Example-ADO` |
 | Build pipeline | "Build and Precheck Package - Source Control", definition ID **59** |
 | Upgrade pipeline | "Upgrade Environment", definition ID **60** |
+| Ad-hoc build pipeline (section 14) | "Build with Git Change Detection", definition ID **62** |
+| Ad-hoc-triggering folder | `ad-hoc/` |
 | Self-hosted agent pool | `dbmaestro-windows` |
 | GitHub org (source repos + `dbmaestro-cicd` templates) | `DBMaestroDev` |
 | `dbmaestro-cicd` service connection name | `dbmaestro-cicd` |
@@ -32,6 +36,7 @@ The workaround is a pipeline whose own source repository is `example-ado-source-
 - GitHub service connection **"GitHub using Azure Pipelines app"**, connected to the DBMaestroDev GitHub org.
 - Pipeline **"Build and Precheck Package - Source Control"** — org `dbmsc`, project `Example`, definition ID **59**. `packageName` has no default, so it's always required. `tasksList` technically has a default (`'none'`), but the pipeline's own validation step fails the run if `buildType` is left at its default (`'Specific Tasks'`) and `tasksList` is `'none'`/empty — so in practice both `packageName` and `tasksList` must be supplied. This workflow sets both to the extracted TaskID.
 - Pipeline **"Upgrade Environment"** — org `dbmsc`, project `Example`, definition ID **60**. All of its parameters (`targetEnvironment`, `packageNames`, `tagName`, `projectName`, `agentJarPath`, `runnerPool`) have defaults; the workflow explicitly sets `targetEnvironment`, `packageNames`, and `runnerPool`. `targetEnvironment` only accepts `'Integration'` or `'Production'` (case-sensitive, `'qa'` was dropped) — the orchestrator must pass those exact strings.
+- Pipeline **"Build with Git Change Detection"** (`build-git-changes.yml`) — org `dbmsc`, project `Example`, definition ID **62**. Unrelated to the TaskID flow above — see section 14. All of its parameters already have defaults tuned for this setup (`packagesFolder: 'ad-hoc'`, `baseBranch: 'main'`), so it can be queued with no required overrides.
 - A GitHub service connection named exactly **`dbmaestro-cicd`**, authorized in this project and pointed at `DBMaestroDev/dbmaestro-cicd`. Both `build-source-control.yml` and `upgrade-environment.yml` declare this as a second `resources.repositories` entry (`endpoint: dbmaestro-cicd`) so they can check out DBmaestro's reusable pipeline templates. Without this exact-named, authorized connection, both pipelines fail immediately with `Repository dbmaestro-cicd references endpoint dbmaestro-cicd which does not exist or is not authorized for use` — see section 7.
 - A registered self-hosted **Windows** agent in the **`dbmaestro-windows`** pool, with **PowerShell 7+ (`pwsh`)** installed. All three pipelines run on this one pool now — the orchestrator's jobs directly (`pool: dbmaestro-windows`), and pipelines 59/60 via their `runnerPool` parameter, which defaults to `'dbmaestro-windows'` and is also explicitly passed by the orchestrator (`downstreamRunnerPool` variable). **PowerShell 7+ is a hard requirement, not a fallback-able one:** every Windows-path step in the `dbmaestro-cicd` templates (`build-from-source`, `precheck-package`, `create-package`, `detect-packages`, `tag-package`, `get-cli-jar`, `upgrade-environment`) hardcodes `pwsh: true` on its `PowerShell@2` task — that's baked into the shared templates, not something this workflow's own YAML controls, so it can't be worked around by switching the orchestrator's own steps to `powershell:` (Windows PowerShell 5.1). If `pwsh` is missing from an agent, install PowerShell 7+ (`winget install --id Microsoft.PowerShell` or the MSI from https://aka.ms/PSWindows) and **restart the Azure Pipelines agent service** afterward — the same PATH-caching gotcha covered for Azure CLI in section 7a applies here too.
 - The DBmaestro template calls in both pipelines are set to `useWindows: true`.
@@ -50,7 +55,7 @@ Commits on `example-ado-source-control` must follow this format:
 Example:  v1.0.1; TaskID: V1.0.1
 ```
 
-This format is generated automatically by the **DBmaestro Source Control** application — it isn't something you type by hand. The only thing required on your end is to specify the **TaskID** value in the tool at commit time; DBmaestro Source Control then builds the full commit message (version plus `TaskID:` segment) for you. If a commit is ever made outside that tool, or the TaskID field is left blank, the message won't match this format and the Build stage's extraction step will fail with "Could not find 'TaskID: <value>' ..." (see section 14).
+This format is generated automatically by the **DBmaestro Source Control** application — it isn't something you type by hand. The only thing required on your end is to specify the **TaskID** value in the tool at commit time; DBmaestro Source Control then builds the full commit message (version plus `TaskID:` segment) for you. If a commit is ever made outside that tool, or the TaskID field is left blank, the message won't match this format and the Build stage's extraction step will fail with "Could not find 'TaskID: <value>' ..." (see section 15).
 
 The value after `TaskID:` is extracted once, in the Build stage, and reused as `packageName` for the build and as `packageNames` for both the integration and production upgrades.
 
@@ -69,6 +74,8 @@ The orchestrator pipeline (`source-control-workflow.yml`, living in `example-ado
 Each gate is a separate Azure DevOps Environment with a manual Approval check configured in the ADO UI, not in code — so who approves any single gate can change later without touching this file.
 
 The `UpgradeIntegration` and `UpgradeProduction` stages each list **two** entries in `dependsOn` (their approval gate, and `Build`), not just the gate. This is required, not redundant: Azure DevOps' `stageDependencies` output-variable expressions only resolve for stages that are *explicitly* listed in `dependsOn` — even a stage that's already an indirect ancestor (through the gate) won't be visible otherwise. Without `Build` listed explicitly, `stageDependencies.Build.Build.outputs['extract.packageName']` silently resolves to nothing, which surfaces downstream as `packageNames' parameter is not a valid String`. Execution order is unaffected either way, since `Build` already has to finish before the gate stage runs.
+
+This pipeline's trigger explicitly **excludes** `ad-hoc/*` (`paths: exclude: [ad-hoc/*]`) so it stays mutually exclusive with the ad-hoc workflow (section 14): without that exclusion, a commit that only touches `ad-hoc/` would also trigger this workflow and fail immediately at TaskID extraction, since ad-hoc commits don't follow the `<version>; TaskID: <value>` convention.
 
 ### 5a. Why "fire-and-forget" instead of "queue and wait"
 
@@ -152,11 +159,13 @@ Then **restart the Azure Pipelines agent service** (or reboot the machine). Wind
 
 This creates the orchestrator pipeline in the same `dbmsc`/`Example` project as pipelines 59 and 60.
 
+Repeat the same steps for `ad-hoc-workflow.yml` (same repository, same connection) to create the second, separate trigger pipeline that the ad-hoc workflow needs (section 14) — it's a different pipeline definition from this one, since each YAML file gets its own definition when pointed to from Pipelines → New Pipeline.
+
 ## 9. Grant permissions to queue the build and upgrade pipelines (59 and 60 in this example)
 
 The orchestrator runs as the project's build service identity (e.g. `Example Build Service (dbmsc)` — the exact name follows the pattern `<project> Build Service (<org>)`), which needs explicit rights on both target pipelines to queue them with custom parameters. Without this, runs fail with `TF215106` access-denied errors.
 
-Repeat for **each** of pipeline 59 (Build and Precheck Package - Source Control) and pipeline 60 (Upgrade Environment):
+Repeat for **each** of pipeline 59 (Build and Precheck Package - Source Control), pipeline 60 (Upgrade Environment), and pipeline 62 (Build with Git Change Detection, section 14) — every pipeline any orchestrator queues via `az pipelines run` needs this, regardless of which orchestrator queues it:
 
 1. Open the pipeline in the ADO UI.
 2. Open the "⋮" (more actions) menu → **Security**.
@@ -243,7 +252,27 @@ By default, Azure DevOps run names show a generic build number like `#20260727.2
 
 Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject `"`, `/`, `:`, `<`, `>`, `\`, `|`, `?`, `@`, and `*`, and a colon in an earlier version of this format caused every run to fail with "contains invalid character(s)." This is purely cosmetic otherwise — it doesn't change any pipeline behavior, only how each run is labeled in the Runs list.
 
-## 14. Troubleshooting
+## 14. Ad-hoc workflow (build-only, git-diff based)
+
+A second, independent trigger pipeline — `ad-hoc-workflow.yml`, also living in `example-ado-source-control` — handles a different case: packages that don't go through the TaskID/approval-gate/upgrade flow at all, just a build whenever something under `ad-hoc/` changes.
+
+[`example-ado-source-control/ad-hoc-workflow.yml`](./example-ado-source-control/ad-hoc-workflow.yml)
+
+Why this is separate from the main workflow rather than a mode of it:
+
+- **Different trigger scope.** It fires only on pushes touching `ad-hoc/*` (`trigger: paths: include: [ad-hoc/*]`), while the main workflow explicitly excludes that same path (section 5) — the two are mutually exclusive by design, so a single commit never triggers both.
+- **No TaskID extraction.** The target pipeline, **"Build with Git Change Detection"** (`build-git-changes.yml`, definition ID 62), detects which packages changed by diffing against its `baseBranch` parameter (default `'main'`) rather than reading anything out of the commit message. Ad-hoc commits don't need to follow the `<version>; TaskID: <value>` convention from section 4.
+- **No gates, no upgrade chain.** This is intentionally build-only. A push under `ad-hoc/` queues pipeline 62 (fire-and-forget, same rationale as section 5a — this org's 1-parallel-job limit applies here too) and the workflow ends there. Add approval gates and an upgrade stage later if ad-hoc packages ever need the same promotion path as the main release workflow — nothing about the current design blocks that.
+- **No required parameter overrides.** Every parameter on pipeline 62 already has a default that fits this setup (`packagesFolder: 'ad-hoc'`, `projectName: 'Example-ADO'`, `baseBranch: 'main'`), so the "Queue" step only needs to pass `runnerPool` explicitly, for consistency with the rest of this guide.
+
+### Test
+
+1. Commit a change to a file under `ad-hoc/` in `example-ado-source-control` (any message — no TaskID convention needed).
+2. Confirm `ad-hoc-workflow.yml` triggers and its Build stage queues pipeline 62 — check the printed run URL.
+3. Confirm the main `source-control-workflow.yml` orchestrator did **not** also trigger from the same commit (the path exclusion from section 5).
+4. Check pipeline 62's run and confirm it detected and built the changed package(s).
+
+## 15. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -262,3 +291,5 @@ Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject
 | The precheck step (or another build/upgrade step) failed and you need to retry with a fix | Push a new commit with the fix — this triggers a brand-new orchestrator run (a new pipeline instance) starting from Build, with a fresh precheck against the corrected package. Then **cancel the original failed run** so it doesn't linger as an incomplete/failed run in the Runs list. Don't try to fix and resume the existing failed run in place. |
 | `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing pipeline 59/60 | Most likely `stageDependencies.Build.Build.outputs['extract.packageName']` didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract` (the `name:` field) and sets the variable with `isOutput=true`; (2) the consuming stage (`UpgradeIntegration`/`UpgradeProduction`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 5. |
 | Build/Upgrade step fails with "Could not find 'TaskID: <value>' ..." | The commit message didn't match the required `<version>; TaskID: <value>` format — amend the commit message and re-push. |
+| A commit touching `ad-hoc/` triggered both `ad-hoc-workflow.yml` **and** the main `source-control-workflow.yml`, and the latter failed at TaskID extraction | The main workflow's `paths: exclude: [ad-hoc/*]` (section 5) is missing, misconfigured, or the commit touched files both inside and outside `ad-hoc/` in the same push (path filters trigger on the whole push, not per-file) — see section 14. |
+| A commit under `ad-hoc/` didn't trigger anything | Confirm the `ad-hoc-workflow.yml` pipeline definition actually exists in ADO (section 8) and that the push landed on `main` — the trigger only watches that branch. |

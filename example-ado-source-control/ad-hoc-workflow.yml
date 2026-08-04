@@ -1,0 +1,63 @@
+# Ad-hoc package build: triggered by pushes to example-ado-source-control that
+# touch files under the 'ad-hoc/' folder.
+#
+# This is intentionally build-only - unlike source-control-workflow.yml, there
+# is no Integration/Production upgrade chain or approval gates here. A push
+# under ad-hoc/ just queues the "Build with Git Change Detection" pipeline
+# (definition ID 62, code: build-git-changes.yml in example-ado-pipelines) and
+# is done. Add gates later if ad-hoc packages ever need the same promotion
+# workflow as the main release pipeline.
+#
+# Fire-and-forget, same rationale as source-control-workflow.yml (see that
+# file's NOTE comments): this org has only 1 self-hosted parallel job, so
+# queuing and then polling for completion would deadlock. This step just
+# queues pipeline 62 and exits - check the run yourself via the printed URL.
+#
+# No TaskID extraction here: pipeline 62 does its own git-diff based package
+# detection against its `baseBranch` parameter (default 'main') - it doesn't
+# need anything parsed from the commit message the way pipeline 59 does.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - ad-hoc/*
+
+variables:
+  targetOrganization: 'https://dev.azure.com/dbmsc'
+  targetProject: 'Example'
+  adHocBuildPipelineId: '62'   # Build with Git Change Detection
+  downstreamRunnerPool: 'dbmaestro-windows'
+
+stages:
+  - stage: Build
+    displayName: 'Build Ad-Hoc Package(s) from Git Changes'
+    jobs:
+      - job: Build
+        pool: dbmaestro-windows
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              # Authenticate via env var rather than piping into 'az devops login' -
+              # on Windows, 'az' is a .cmd wrapper, and piping a token into it from
+              # PowerShell unreliably loses the stdin content across that wrapper.
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              $runId = az pipelines run `
+                --organization "$(targetOrganization)" `
+                --project "$(targetProject)" `
+                --id "$(adHocBuildPipelineId)" `
+                --parameters runnerPool="$(downstreamRunnerPool)" `
+                --query id -o tsv
+              Write-Host "Queued ad-hoc build run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
+              Write-Host "Check run status: $(targetOrganization)/$(targetProject)/_build/results?buildId=$runId"
+            displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
