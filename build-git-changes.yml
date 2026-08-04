@@ -123,6 +123,13 @@ stages:
               detectFromPush: true
               useWindows: true
               sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
+              # Must match the Build stage's packagesFolder below (both default
+              # to 'ad-hoc') - detect-packages.ps1/.sh match changed files as
+              # "<packagesFolder>/<packageName>/...", so if these two ever
+              # diverge, detection silently finds nothing even though files
+              # genuinely changed (this is exactly what happened when the
+              # template still hardcoded "packages/" - see dbmaestro-cicd).
+              packagesFolder: ${{ parameters.packagesFolder }}
 
   - stage: Build
     displayName: 'Build Changed Packages'
