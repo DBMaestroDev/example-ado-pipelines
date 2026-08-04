@@ -44,6 +44,6 @@ extends:
     packagesFolder: 'ad-hoc'
     targetOrganization: 'https://dev.azure.com/dbmsc'
     targetProject: 'Example'
-    adHocBuildPipelineId: '62'   # this repo's "Build with Git Change Detection" pipeline
+    adHocBuildPipelineId: '62'   # this repo's "Build with Git" pipeline
     upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
