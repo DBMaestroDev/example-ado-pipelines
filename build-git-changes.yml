@@ -69,6 +69,17 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
+          # DEBUG: print where things actually landed, to confirm/adjust the
+          # sourcesPath assumption below. Safe to remove once checkout layout
+          # is confirmed stable.
+          - pwsh: |
+              Write-Host "Build.SourcesDirectory = $(Build.SourcesDirectory)"
+              Write-Host "--- Contents of Build.SourcesDirectory ---"
+              Get-ChildItem -Force "$(Build.SourcesDirectory)" | Select-Object Name, Mode | Format-Table | Out-String | Write-Host
+              Write-Host "--- Current location ---"
+              Get-Location
+            displayName: 'DEBUG: List checkout contents'
+
           # detectFromPush (not baseRef) is the correct mode here: this checkout
           # is always 'main' itself (the ref: on the repository resource above),
           # so comparing it against "origin/main" would just be main vs. main -
@@ -79,7 +90,7 @@ stages:
             parameters:
               detectFromPush: true
               useWindows: true
-              sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
+              sourcesPath: '$(Build.SourcesDirectory)'
 
   - stage: Build
     displayName: 'Build Changed Packages'
@@ -98,7 +109,7 @@ stages:
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
           sourcesRepository: exampleAdoSourceControl
-          sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
+          sourcesPath: '$(Build.SourcesDirectory)'
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
           version: $(CLI_VERSION)
