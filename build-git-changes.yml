@@ -64,10 +64,13 @@ stages:
           # No fetchDepth here - omitting it entirely is what actually gets
           # full history for this repository resource. Explicit fetchDepth: 0
           # is *documented* to also mean "full history", but for this GitHub
-          # resource type it was observed to still only fetch 1 commit
-          # ("error: Could not access 'HEAD~1'") - likely getting passed
-          # through literally as --depth=0 rather than being special-cased to
-          # "omit --depth". Leaving fetchDepth unset avoids that path entirely.
+          # resource type it was observed to still only fetch 1 commit either
+          # way - with fetchDepth: 0 AND with it omitted entirely ("fatal:
+          # ambiguous argument 'HEAD~1': unknown revision"). This looks like a
+          # hard shallow-checkout behavior for this resource type regardless
+          # of the setting, not something fetchDepth actually controls here -
+          # see the explicit `git fetch --unshallow` step below, which is the
+          # real fix, not just a fallback.
           #
           # Confirmed via the DEBUG step below: self (example-ado-pipelines) is
           # checked out automatically even with no explicit `checkout: self`
@@ -80,6 +83,18 @@ stages:
 
           - checkout: dbmaestro-cicd
             fetchDepth: 1
+
+          # This is the actual fix for the shallow-checkout behavior noted
+          # above, not just a defensive fallback: force full history so
+          # HEAD~1 resolves for the detectFromPush diff below. --unshallow
+          # errors harmlessly ("does not make sense") if the repo already has
+          # full history, so this is safe to always run regardless.
+          - pwsh: |
+              Set-Location "$(Build.SourcesDirectory)/example-ado-source-control"
+              git fetch --unshallow 2>&1 | Write-Host
+              $LASTEXITCODE = 0
+              Write-Host "Commit count after unshallow: $(git rev-list --count HEAD)"
+            displayName: 'Ensure full git history is available for diff'
 
           # DEBUG: print where things actually landed, to confirm/adjust the
           # sourcesPath assumption below. Safe to remove once checkout layout
