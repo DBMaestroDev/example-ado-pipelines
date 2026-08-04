@@ -80,6 +80,11 @@ stages:
           # for the checkout step/template refs. That's why sourcesPath below
           # is ".../example-ado-source-control", not ".../exampleAdoSourceControl".
           - checkout: exampleAdoSourceControl
+            persistCredentials: true   # needed so the later 'git fetch --unshallow'
+                                        # step below can authenticate - checkout
+                                        # credentials aren't persisted to later
+                                        # steps by default, and without this the
+                                        # fetch fails with "terminal prompts disabled"
 
           - checkout: dbmaestro-cicd
             fetchDepth: 1
