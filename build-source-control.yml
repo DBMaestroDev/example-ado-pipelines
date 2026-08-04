@@ -113,10 +113,8 @@ stages:
               additionalInformation: $(additionalInfo)
               agentJarPath: ${{ parameters.agentJarPath }}
               server: $(DBMAESTRO_SERVER)
-              user: $(DBMAESTRO_USER)
-              password: $(DBMAESTRO_PASSWORD)
+              accessTokenFilePath: $(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)
               useSsl: 'False'
-              authType: 'DBmaestroAccount'
               createDowngradeScripts: ${{ parameters.createDowngradeScripts }}
               tags: ${{ parameters.tags }}
               tagTypeName: ${{ parameters.tagTypeName }}
@@ -131,8 +129,6 @@ stages:
               projectName: ${{ parameters.projectName }}
               agentJarPath: ${{ parameters.agentJarPath }}
               server: $(DBMAESTRO_SERVER)
-              user: $(DBMAESTRO_USER)
-              password: $(DBMAESTRO_PASSWORD)
+              accessTokenFilePath: $(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)
               useSsl: 'False'
-              authType: 'DBmaestroAccount'
               useWindows: true

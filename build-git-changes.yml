@@ -1,0 +1,101 @@
+﻿# Example: Build with Git Change Detection (Azure DevOps)
+# Detects which packages changed in the current branch or PR diff and builds them.
+resources:
+  repositories:
+    - repository: dbmaestro-cicd
+      type: github
+      name: DBMaestroDev/dbmaestro-cicd
+      endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
+      ref: refs/tags/v1
+
+parameters:
+  - name: projectName
+    type: string
+    default: 'Demo-PSQL'
+  - name: packagesFolder
+    type: string
+    default: 'packages'
+  - name: agentJarPath
+    type: string
+    default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
+  - name: runnerPool
+    type: string
+    default: 'dbmaestro-windows'
+  - name: baseBranch
+    displayName: 'Base branch to compare against (manual runs)'
+    type: string
+    default: 'main'
+  - name: tags
+    displayName: 'Comma-separated tags to apply after build (optional, e.g., "TASK-123,TASK-456")'
+    type: string
+    default: ''
+  - name: tagTypeName
+    displayName: 'Tag type name'
+    type: string
+    default: 'Task'
+trigger: none
+
+stages:
+  - stage: Detect
+    displayName: 'Detect Changed Packages'
+    jobs:
+      - job: DetectChanges
+        displayName: 'Detect Changed Packages'
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - checkout: dbmaestro-cicd
+            fetchDepth: 1
+
+          - bash: |
+              if [ -n "$SYSTEM_PULLREQUEST_SOURCEBRANCH" ]; then
+                BRANCH="${SYSTEM_PULLREQUEST_SOURCEBRANCH#refs/heads/}"
+              else
+                BRANCH="$(Build.SourceBranchName)"
+              fi
+              git checkout "$BRANCH"
+            workingDirectory: $(Build.SourcesDirectory)
+
+          - bash: |
+              IS_PR="false"
+              BASE_REF="${{ parameters.baseBranch }}"
+
+              if [ -n "$SYSTEM_PULLREQUEST_TARGETBRANCH" ]; then
+                IS_PR="true"
+                BASE_REF="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+              fi
+
+              echo "##vso[task.setvariable variable=resolvedIsPr]$IS_PR"
+              echo "##vso[task.setvariable variable=resolvedBaseRef]$BASE_REF"
+            displayName: 'Resolve Detection Parameters'
+
+          - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
+            parameters:
+              isPullRequest: $(resolvedIsPr)
+              baseRef: $(resolvedBaseRef)
+              detectFromPush: false
+              useWindows: true
+
+  - stage: Build
+    displayName: 'Build Changed Packages'
+    dependsOn: Detect
+    jobs:
+      - template: azure-devops/templates/build-multiple-packages.yml@dbmaestro-cicd
+        parameters:
+          packageNames: ''
+          projectName: ${{ parameters.projectName }}
+          packagesFolder: ${{ parameters.packagesFolder }}
+          agentJarPath: ${{ parameters.agentJarPath }}
+          server: $(DBMAESTRO_SERVER)
+          accessTokenFilePath: $(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)
+          useSsl: 'True'
+          packageType: 'AdHoc'
+          runnerPool: ${{ parameters.runnerPool }}
+          useWindows: true
+          # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
+          # Leave empty if the JAR is pre-installed on the runner.
+          version: $(CLI_VERSION)
+          tags: ${{ parameters.tags }}
+          tagTypeName: ${{ parameters.tagTypeName }}

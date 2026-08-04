@@ -67,10 +67,8 @@ stages:
               targetEnvironment: ${{ parameters.targetEnvironment }}
               agentJarPath: ${{ parameters.agentJarPath }}
               server: $(DBMAESTRO_SERVER)
-              user: $(DBMAESTRO_USER)
-              password: $(DBMAESTRO_PASSWORD)
+              accessTokenFilePath: $(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)
               useSsl: 'False'
-              authType: 'DBmaestroAccount'
               useWindows: true
               # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
               # Leave empty if the JAR is pre-installed on the runner.
