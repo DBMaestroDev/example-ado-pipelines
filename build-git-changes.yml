@@ -7,6 +7,11 @@
 # checked out as a second repository resource below, same pattern as
 # dbmaestro-cicd, and both the Detect and Build stages are pointed at that
 # checkout path explicitly via sourcesPath/sourcesRepository parameters.
+#
+# Checkout folder naming (confirmed empirically, see NOTE in Detect stage):
+# every repo lands in a subfolder of $(Build.SourcesDirectory) named after its
+# actual repository name (DBMaestroDev/example-ado-source-control -> folder
+# "example-ado-source-control"), not the `repository:` alias declared below.
 resources:
   repositories:
     - repository: dbmaestro-cicd
@@ -62,8 +67,15 @@ stages:
           # resource type it was observed to still only fetch 1 commit
           # ("error: Could not access 'HEAD~1'") - likely getting passed
           # through literally as --depth=0 rather than being special-cased to
-          # "omit --depth" the way it apparently is for self/Azure Repos
-          # checkouts. Leaving fetchDepth unset avoids that path entirely.
+          # "omit --depth". Leaving fetchDepth unset avoids that path entirely.
+          #
+          # Confirmed via the DEBUG step below: self (example-ado-pipelines) is
+          # checked out automatically even with no explicit `checkout: self`
+          # step, and every repo (including this one) lands in a subfolder of
+          # $(Build.SourcesDirectory) named after the repository's actual name
+          # (the basename of `name:` above) - NOT the `repository:` alias used
+          # for the checkout step/template refs. That's why sourcesPath below
+          # is ".../example-ado-source-control", not ".../exampleAdoSourceControl".
           - checkout: exampleAdoSourceControl
 
           - checkout: dbmaestro-cicd
@@ -90,7 +102,7 @@ stages:
             parameters:
               detectFromPush: true
               useWindows: true
-              sourcesPath: '$(Build.SourcesDirectory)'
+              sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
 
   - stage: Build
     displayName: 'Build Changed Packages'
@@ -109,7 +121,7 @@ stages:
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
           sourcesRepository: exampleAdoSourceControl
-          sourcesPath: '$(Build.SourcesDirectory)'
+          sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
           version: $(CLI_VERSION)
