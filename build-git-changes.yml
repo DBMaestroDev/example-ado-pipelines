@@ -68,7 +68,7 @@ stages:
               baseRef: ${{ parameters.baseBranch }}
               detectFromPush: false
               useWindows: true
-              sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
+              sourcesPath: '$(Build.SourcesDirectory)'
 
   - stage: Build
     displayName: 'Build Changed Packages'
@@ -87,7 +87,7 @@ stages:
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
           sourcesRepository: exampleAdoSourceControl
-          sourcesPath: '$(Build.SourcesDirectory)/exampleAdoSourceControl'
+          sourcesPath: '$(Build.SourcesDirectory)'
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
           version: $(CLI_VERSION)
