@@ -56,8 +56,15 @@ stages:
         displayName: 'Detect Changed Packages'
         pool: ${{ parameters.runnerPool }}
         steps:
+          # No fetchDepth here - omitting it entirely is what actually gets
+          # full history for this repository resource. Explicit fetchDepth: 0
+          # is *documented* to also mean "full history", but for this GitHub
+          # resource type it was observed to still only fetch 1 commit
+          # ("error: Could not access 'HEAD~1'") - likely getting passed
+          # through literally as --depth=0 rather than being special-cased to
+          # "omit --depth" the way it apparently is for self/Azure Repos
+          # checkouts. Leaving fetchDepth unset avoids that path entirely.
           - checkout: exampleAdoSourceControl
-            fetchDepth: 0
 
           - checkout: dbmaestro-cicd
             fetchDepth: 1
