@@ -35,7 +35,7 @@ parameters:
     type: string
     default: 'dbmaestro-windows'
   - name: baseBranch
-    displayName: 'Base branch to compare against (manual runs)'
+    displayName: 'Base branch to compare against (manual runs) - currently unused, see NOTE in Detect stage'
     type: string
     default: 'main'
   - name: tags
@@ -62,11 +62,15 @@ stages:
           - checkout: dbmaestro-cicd
             fetchDepth: 1
 
+          # detectFromPush (not baseRef) is the correct mode here: this checkout
+          # is always 'main' itself (the ref: on the repository resource above),
+          # so comparing it against "origin/main" would just be main vs. main -
+          # always empty, even ignoring that the ref may not resolve at all in
+          # this checkout. detectFromPush instead diffs HEAD~1 vs HEAD, i.e.
+          # exactly the commit that made ad-hoc-workflow.yml queue this run.
           - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
             parameters:
-              isPullRequest: false
-              baseRef: ${{ parameters.baseBranch }}
-              detectFromPush: false
+              detectFromPush: true
               useWindows: true
               sourcesPath: '$(Build.SourcesDirectory)'
 
