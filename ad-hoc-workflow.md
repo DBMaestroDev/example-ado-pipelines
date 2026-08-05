@@ -64,14 +64,35 @@ Unlike `source-control-workflow.yml`'s wrapper, this one also needs the `dbmaest
 ## 3. Stage-by-stage walkthrough
 
 1. **Build** — checks out `self` and `dbmaestro-cicd`, resolves where `self` actually landed (see below), detects changed packages via git-diff, and queues the "Build with Git Change Detection" pipeline (fire-and-forget), passing the detected package names directly.
-2. **Integration pre-approval gate** — Environment `Integration-pre-approval`. Skipped entirely if detection found nothing to build (see section 5).
-3. **Upgrade (Integration)** — queues "Upgrade Environment" with `targetEnvironment=Integration` and the detected package names (fire-and-forget).
-4. **Integration post-approval gate** — Environment `Integration-post-approval`.
-5. **Production pre-approval gate** — Environment `Production-pre-approval`.
-6. **Upgrade (Production)** — queues "Upgrade Environment" again with `targetEnvironment=Production` (fire-and-forget).
-7. **Production post-approval gate** — Environment `Production-post-approval`. Final confirmation; workflow ends here.
 
-Gates 2–7 follow the exact same pattern, fire-and-forget rationale, and manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md`'s "Fire-and-forget design" section for the full explanation; it isn't repeated here.
+After Build, the chain splits into two **independent** legs — Integration and Production — that both become available as soon as Build succeeds, rather than running one after the other. Environment selection happens purely through which leg's pre-approval gate gets approved:
+
+- **Integration leg:**
+  2. **Integration pre-approval gate** — Environment `Integration-pre-approval`. Skipped entirely if detection found nothing to build (see section 5).
+  3. **Upgrade (Integration)** — queues "Upgrade Environment" with `targetEnvironment=Integration` and the detected package names (fire-and-forget).
+  4. **Integration post-approval gate** — Environment `Integration-post-approval`.
+- **Production leg:**
+  2. **Production pre-approval gate** — Environment `Production-pre-approval`. Also depends only on Build, and is skipped entirely if detection found nothing to build (same `has_packages` check as the Integration leg — see section 5).
+  3. **Upgrade (Production)** — queues "Upgrade Environment" with `targetEnvironment=Production` and the detected package names (fire-and-forget).
+  4. **Production post-approval gate** — Environment `Production-post-approval`. Final confirmation for that leg.
+
+Both pre-approval gates open at the same time once Build finishes. Approving only Integration's gate runs only that leg; approving only Production's runs only that leg (in either order); approving both runs both legs concurrently. There is no `dependsOn` between the two legs.
+
+Each leg's own gates follow the exact same pattern, fire-and-forget rationale, and manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md`'s "Fire-and-forget design" section for the full explanation; it isn't repeated here.
+
+### 3a. Closing out a run that only deploys one environment
+
+Because the two legs are independent, a run where you only ever wanted, say, Integration will still have Production's pre-approval gate sitting there, pending, indefinitely. This isn't a bug to fix in the YAML — it's inherent to how Azure DevOps evaluates multi-stage pipelines: a stage only becomes eligible to run once *every* stage it depends on has reached a terminal state (Succeeded, Failed, Skipped, or Rejected), and "awaiting manual approval" isn't terminal. There is no `condition:`/`dependsOn:` construct that lets the overall run finish while a sibling gate is neither approved, rejected, nor timed out — so an unused leg's gate has to be resolved one way or another before the run itself can close.
+
+Three ways to resolve it, none of which require a YAML change:
+
+1. **Reject the gate.** Whoever is deciding just rejects the unused environment's pre-approval check in the ADO UI, right after approving the one they actually want. Immediate, no setup required.
+2. **Configure a timeout on that Environment's approval check.** Environments → the environment in question → "⋮" → Approvals and checks → edit the Approval check's timeout (e.g. 1 hour instead of the default). An un-acted-on gate then auto-rejects on its own instead of waiting indefinitely — useful if leaving a leg permanently unresolved becomes a recurring pattern rather than a one-off.
+3. **Cancel the whole run.** A blunter option if neither of the above fits — stops everything, including the leg that already succeeded, rather than resolving just the unused gate.
+
+**Caveat that applies to options 1 and 2 either way:** a rejected or timed-out approval counts as a *stage failure* in Azure DevOps' multi-stage YAML pipelines — there's no "partially succeeded" run outcome here. So a run where Integration deployed successfully and Production's gate was deliberately rejected will still show up in the Runs list, and in failure-notification emails (`README.md` section 9), as **Failed** overall. Anyone reviewing run status or failure notifications for this pipeline needs to check *which* stage actually failed before assuming something broke — a rejected/unused leg looks identical, at the run-result level, to a genuine failure.
+
+No decision has been made yet on which of these three to standardize on; for now, resolve it however fits the situation.
 
 ### Resolving where `self` actually checked out
 
@@ -101,11 +122,13 @@ Note the `$pkgNames` guard above: `detect-packages.ps1`/`.sh` set `packages_list
 
 ## 5. Skipping the chain when nothing changed
 
-If a push touches `ad-hoc/*` but git-diff finds no actual package changes (e.g. a file that matches the path filter but sits outside any package's own folder), the Integration pre-approval stage — and everything that depends on it — is skipped rather than running an approval gate and upgrade chain for nothing:
+If a push touches `ad-hoc/*` but git-diff finds no actual package changes (e.g. a file that matches the path filter but sits outside any package's own folder), both pre-approval stages — and everything that depends on either of them — are skipped rather than running an approval gate and upgrade chain for nothing:
 
 ```yaml
 condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
 ```
+
+Both `IntegrationPreApproval` and `ProductionPreApproval` carry this exact condition independently — since the two legs no longer depend on each other, Production can't just inherit the check transitively through Integration's stage the way it could when the chain was strictly sequential.
 
 ### The `dependencies` vs `stageDependencies` gotcha
 
@@ -124,9 +147,10 @@ Note where the job name moves: inside the `outputs[]` key for `condition:`, but 
 2. Confirm `ad-hoc-workflow.yml` triggers, the Build stage detects the changed package(s), and the "Build with Git Change Detection" pipeline (62) is queued with those package names.
 3. Confirm the main `source-control-workflow.yml` orchestrator did **not** also trigger from the same commit.
 4. Check that build pipeline's run and confirm it built the expected package(s).
-5. Confirm the Integration pre-approval gate becomes pending (not skipped) — approve it.
-6. Confirm the Upgrade (Integration) stage queues "Upgrade Environment" with the detected package names; check that run succeeded.
-7. Approve the remaining three gates in order (Integration post-approval, Production pre-approval, Production post-approval), confirming the Production upgrade run succeeds before the final approval.
+5. Confirm **both** the Integration and Production pre-approval gates become pending (not skipped) at the same time, right after Build finishes — this is the "both legs open in parallel" behavior.
+6. Approve only the Integration pre-approval gate first, and confirm the Production leg stays pending/untouched (its Upgrade and post-approval stages haven't started) while the Integration leg proceeds.
+7. Confirm the Upgrade (Integration) stage queues "Upgrade Environment" with the detected package names; check that run succeeded, then approve Integration post-approval.
+8. Approve the Production pre-approval gate, confirm Upgrade (Production) queues and succeeds, then approve Production post-approval to finish that leg.
 
 ## 7. Troubleshooting
 

@@ -6,7 +6,7 @@
 
 On every commit to the `example-ado-source-control` GitHub repository, automatically: build a DBmaestro package, gate on manual approval, upgrade the integration environment, gate on manual confirmation, gate on manual approval again, upgrade the production environment, and gate on a final manual confirmation. Values are parsed from the commit message rather than entered by hand.
 
-There's a second, separate workflow for **ad-hoc** package builds: commits that only touch the `ad-hoc/` folder skip all of this — no TaskID convention, no approval gates, no environment upgrade — and instead just build whatever changed via git-diff detection, but still go through the same approval-gated upgrade chain afterward.
+There's a second, separate workflow for **ad-hoc** package builds: commits that only touch the `ad-hoc/` folder skip all of this — no TaskID convention, no approval gates, no environment upgrade — and instead just build whatever changed via git-diff detection, then go through the same approval-gated upgrade environments, except its Integration and Production legs run as two independent gates opened in parallel rather than one fixed sequence — see `ad-hoc-workflow.md` section 3.
 
 This repo hosts one-time setup (this file) plus the shared pipeline logic for both release chains. The chains themselves — stages, parameters, troubleshooting specific to each — are documented separately:
 
