@@ -13,11 +13,17 @@
 # See azure-devops/templates/ad-hoc-workflow.yml usage comment for the
 # wrapper's exact shape.
 #
-# Chain: Build (git-diff detect + queue) -> Integration pre-approval ->
-# Upgrade Integration -> Integration post-approval -> Production
-# pre-approval -> Upgrade Production -> Production post-approval. Mirrors
-# source-control-workflow.yml's chain; see that file's NOTE comments for the
-# fire-and-forget/1-parallel-job rationale, which applies identically here.
+# Shape: Build (git-diff detect + queue) fans out into two independent
+# 3-stage legs - Integration (pre-approval -> Upgrade Integration ->
+# post-approval) and Production (pre-approval -> Upgrade Production ->
+# post-approval). Both legs' pre-approval gates open as soon as Build
+# succeeds; there's no dependency between the two legs, so environment
+# selection happens purely through which gate(s) get approved - approving
+# only Integration's gate runs only that leg, approving only Production's
+# runs only that leg (in either order, or concurrently), and approving both
+# runs both in parallel. See source-control-workflow.yml's NOTE comments for
+# the fire-and-forget/1-parallel-job rationale, which applies identically
+# here.
 #
 # Key difference from source-control-workflow.yml: there's no TaskID to
 # extract from a commit message. Instead, the Build stage below runs its own
@@ -234,8 +240,13 @@ stages:
   # ------------------------------------------------------------------
   - stage: ProductionPreApproval
     displayName: 'Production - Pre-Approval Gate'
-    dependsOn: IntegrationPostApproval
-    condition: succeeded()
+    # dependsOn Build (not IntegrationPostApproval) so this gate opens
+    # concurrently with IntegrationPreApproval right after Build succeeds,
+    # instead of waiting on the Integration leg to be approved and upgraded
+    # first. Needs its own has_packages check below since it no longer
+    # inherits that gating transitively through the Integration leg.
+    dependsOn: Build
+    condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
     jobs:
       - deployment: ProductionPreApprovalGate
         displayName: 'Await Production pre-approval'

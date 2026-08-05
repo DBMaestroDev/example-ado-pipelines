@@ -17,9 +17,6 @@ parameters:
     displayName: 'Target environment for upgrade (manual runs)'
     type: string
     default: 'Integration'
-    values:
-      - 'Integration'
-      - 'Production'
   - name: packageNames
     displayName: 'Package names to upgrade (comma-separated, leave empty to auto-detect)'
     type: string
