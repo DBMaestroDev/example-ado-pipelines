@@ -26,7 +26,7 @@ The other differences all follow from having no TaskID to read:
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
-Same reasoning as `source-control-workflow.yml` (see that doc's section 2): Azure DevOps requires the trigger YAML to live in the repo it triggers from, so a thin file has to exist in every source-control repo, but the actual chain lives once in this `example-ado-pipelines` repo:
+Same reasoning as `source-control-workflow.yml` (see that doc's section 2): Azure DevOps requires the trigger YAML to live in the repo it triggers from, so a thin file has to exist in every individual DBmaestro project's source-control repo, but the actual chain lives once in this `example-ado-pipelines` repo:
 
 - **`example-ado-source-control/ad-hoc-workflow.yml`** — the thin trigger file. [View it](./example-ado-source-control/ad-hoc-workflow.yml).
 - **`example-ado-pipelines/azure-devops/templates/ad-hoc-workflow.yml`** — the real pipeline. [View it](./azure-devops/templates/ad-hoc-workflow.yml).
@@ -50,8 +50,9 @@ extends:
   template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
   parameters:
     packagesFolder: 'ad-hoc'
-    targetOrganization: 'https://dev.azure.com/dbmsc'
-    targetProject: 'Example'
+    targetADOOrganization: 'https://dev.azure.com/dbmsc'
+    targetADOProject: 'Example'
+    dBmaestroProjectName: 'Example-ADO'
     adHocBuildPipelineId: '62'   # this repo's "Build with Git Change Detection" pipeline
     upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
@@ -59,7 +60,7 @@ extends:
 
 Unlike `source-control-workflow.yml`'s wrapper, this one also needs the `dbmaestro-cicd` resource declared at the root level — the template's Build stage checks that repo out directly to run its own detection step (see below), and `resources.repositories` entries used anywhere in an `extends:` chain must be declared in the root file, not the template.
 
-**Setup note:** as with `source-control-workflow.yml`, the `adoPipelines` resource reuses the same `DBMaestroDev` GitHub service connection already authorized for `example-ado-source-control`. If that connection is scoped per-repository, it needs to be granted access to `example-ado-pipelines` too, or a second connection registered with the `endpoint:` value updated to match.
+**Setup note:** as with `source-control-workflow.yml`, `DBMaestroDev` above is just this guide's own example deployment — in your setup, both `example-ado-pipelines` and `example-ado-source-control` live in **your own** GitHub org, not `DBMaestroDev` (that org is only for `dbmaestro-cicd`). Since your two repos share one org, the `adoPipelines` resource can reuse the same GitHub service connection already required for `example-ado-source-control`'s self-trigger — no separate connection needed. If that connection is scoped per-repository, it needs to be granted access to `example-ado-pipelines` too, or a second connection registered with the `endpoint:` value updated to match.
 
 ## 3. Stage-by-stage walkthrough
 
@@ -96,7 +97,7 @@ No decision has been made yet on which of these three to standardize on; for now
 
 ### Resolving where `self` actually checked out
 
-The Build job checks out two repos (`self` and `dbmaestro-cicd`), which pushes `self` out of the job's root directory into a subfolder of `$(Build.SourcesDirectory)` named after its actual repository name — not the `checkout:` alias. Since this template is meant to be reused by more than one source-control repo, each with a different repository name, that subfolder name can't be hardcoded. It's resolved at runtime instead:
+The Build job checks out two repos (`self` and `dbmaestro-cicd`), which pushes `self` out of the job's root directory into a subfolder of `$(Build.SourcesDirectory)` named after its actual repository name — not the `checkout:` alias. Since this template is meant to be reused by every individual DBmaestro project's own source-control repo, each with a different repository name, that subfolder name can't be hardcoded. It's resolved at runtime instead:
 
 ```powershell
 $selfFolder = ("$(Build.Repository.Name)" -split '/')[-1]

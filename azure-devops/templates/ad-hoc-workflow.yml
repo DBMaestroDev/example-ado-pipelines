@@ -46,11 +46,14 @@ parameters:
     displayName: 'Root folder that ad-hoc packages live under in this repo'
     type: string
     default: 'ad-hoc'
-  - name: targetOrganization
+  - name: targetADOOrganization
     displayName: 'Azure DevOps organization URL that hosts the downstream pipelines'
     type: string
-  - name: targetProject
+  - name: targetADOProject
     displayName: 'Azure DevOps project that hosts the downstream pipelines'
+    type: string
+  - name: dBmaestroProjectName
+    displayName: 'DBmaestro project name required by the downstream build/upgrade pipelines'
     type: string
   - name: adHocBuildPipelineId
     displayName: 'Pipeline ID of this repo''s "Build with Git Change Detection" pipeline (built from build-git-changes.yml)'
@@ -144,14 +147,14 @@ stages:
               $pkgNames = if ($hasPackages -eq "true") { "$(detectPackages.packages_list)" } else { "" }
 
               $runId = az pipelines run `
-                --organization "${{ parameters.targetOrganization }}" `
-                --project "${{ parameters.targetProject }}" `
+                --organization "${{ parameters.targetADOOrganization }}" `
+                --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.adHocBuildPipelineId }}" `
-                --parameters packageNames="$pkgNames" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued ad-hoc build run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
             displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -208,14 +211,14 @@ stages:
               $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
 
               $runId = az pipelines run `
-                --organization "${{ parameters.targetOrganization }}" `
-                --project "${{ parameters.targetProject }}" `
+                --organization "${{ parameters.targetADOOrganization }}" `
+                --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Integration" packageNames="$(packageNames)" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Integration" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
             displayName: 'Queue: Upgrade Environment - Integration (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -278,14 +281,14 @@ stages:
               $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
 
               $runId = az pipelines run `
-                --organization "${{ parameters.targetOrganization }}" `
-                --project "${{ parameters.targetProject }}" `
+                --organization "${{ parameters.targetADOOrganization }}" `
+                --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Production" packageNames="$(packageNames)" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Production" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetOrganization }}/${{ parameters.targetProject }}/_build/results?buildId=$runId"
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
             displayName: 'Queue: Upgrade Environment - Production (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)

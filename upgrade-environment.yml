@@ -27,7 +27,6 @@ parameters:
     default: 'none'
   - name: projectName
     type: string
-    default: 'Example-ADO'
   - name: agentJarPath
     type: string
     default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'

@@ -18,7 +18,6 @@ parameters:
   - name: projectName
     displayName: 'DBmaestro project name'
     type: string
-    default: 'Example-ADO'
   - name: environmentName
     displayName: 'Development environment name'
     type: string

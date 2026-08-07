@@ -42,8 +42,9 @@ extends:
   template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
   parameters:
     packagesFolder: 'ad-hoc'
-    targetOrganization: 'https://dev.azure.com/dbmsc'
-    targetProject: 'Example'
+    targetADOOrganization: 'https://dev.azure.com/dbmsc'
+    targetADOProject: 'Example'
+    dBmaestroProjectName: 'Example-ADO'
     adHocBuildPipelineId: '62'   # this repo's "Build with Git" pipeline
     upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'

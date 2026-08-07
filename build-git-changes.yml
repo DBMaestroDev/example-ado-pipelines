@@ -35,7 +35,6 @@ resources:
 parameters:
   - name: projectName
     type: string
-    default: 'Example-ADO'
   - name: packagesFolder
     type: string
     default: 'ad-hoc'

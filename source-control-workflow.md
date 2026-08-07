@@ -20,14 +20,14 @@ Without that exclusion, an ad-hoc-only commit would also trigger this workflow a
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
-Azure DevOps requires a self-triggered pipeline's YAML to live in the same repo whose pushes trigger it — there's no way around that. But the actual release logic doesn't need to live there too, and with more than one source-control repo potentially sharing this same chain, it shouldn't: copy-pasting the full 7-stage pipeline into every source-control repo would mean re-fixing the same bug in N places every time.
+Azure DevOps requires a self-triggered pipeline's YAML to live in the same repo whose pushes trigger it — there's no way around that. But the actual release logic doesn't need to live there too, and since every individual DBmaestro project needs its own `example-ado-source-control`-pattern repo (a commit to one project's repo must only drive that project's own chain), it shouldn't: copy-pasting the full 7-stage pipeline into every project's source-control repo would mean re-fixing the same bug in N places every time.
 
 So the logic is split across two files:
 
 - **`example-ado-source-control/source-control-workflow.yml`** — the thin trigger file. Just `trigger`, a `resources.repositories` entry pointing back at this `example-ado-pipelines` repo, and an `extends:` block passing a handful of parameters. [View it](./example-ado-source-control/source-control-workflow.yml).
 - **`example-ado-pipelines/azure-devops/templates/source-control-workflow.yml`** — the real pipeline: all 7 stages, extracted once. [View it](./azure-devops/templates/source-control-workflow.yml).
 
-If a second source-control repo ever needs this same chain, it gets an equally thin copy of the wrapper file (same shape, its own parameter values) — not a copy of the whole chain. Any future fix to the chain itself happens once, in the template.
+Every additional DBmaestro project's source-control repo gets an equally thin copy of the wrapper file (same shape, its own parameter values) — not a copy of the whole chain. Any future fix to the chain itself happens once, in the template.
 
 ```yaml
 # example-ado-source-control/source-control-workflow.yml (abridged)
@@ -42,14 +42,15 @@ resources:
 extends:
   template: azure-devops/templates/source-control-workflow.yml@adoPipelines
   parameters:
-    targetOrganization: 'https://dev.azure.com/dbmsc'
-    targetProject: 'Example'
+    targetADOOrganization: 'https://dev.azure.com/dbmsc'
+    targetADOProject: 'Example'
+    dBmaestroProjectName: 'Example-ADO'
     buildPipelineId: '59'    # this repo's "Build and Precheck Package - Source Control" pipeline
     upgradePipelineId: '60'  # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
 ```
 
-**Setup note:** the `adoPipelines` resource above reuses the same `DBMaestroDev` GitHub service connection already authorized for `example-ado-source-control` (see `README.md` section 3). If that connection is scoped per-repository rather than org-wide, it also needs to be granted access to `example-ado-pipelines`, or a second connection registered and the `endpoint:` value updated to match.
+**Setup note:** `DBMaestroDev` above is just this guide's own example deployment — in your setup, both `example-ado-pipelines` and `example-ado-source-control` live in **your own** GitHub org, not `DBMaestroDev` (that org is only for `dbmaestro-cicd`). Since your two repos share one org, the `adoPipelines` resource can reuse the same GitHub service connection already required for `example-ado-source-control`'s self-trigger (see `README.md` section 2) — no separate connection needed. If that connection is scoped per-repository rather than org-wide, it also needs to be granted access to `example-ado-pipelines`, or a second connection registered and the `endpoint:` value updated to match.
 
 ## 3. Commit message convention
 
