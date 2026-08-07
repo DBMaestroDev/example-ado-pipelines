@@ -71,7 +71,18 @@ These are the downstream pipelines the orchestrators queue via `az pipelines run
 4. Repeat for `build-git-changes.yml` → rename to "Build with Git Change Detection".
 5. Note each one's definition ID (shown in the pipeline's URL or the Pipelines list) — you'll need them wherever this guide says "59", "60", or "62".
 
-## 7. Create the ADO pipeline definitions for the orchestrators
+## 7. Configure DBmaestro pipeline variables
+
+Set these as Variables on each of the three pipelines from step 6 (or once in a shared Variable Group — Pipelines → Library → Variable groups — linked to all three):
+
+- [ ] `DBMAESTRO_SERVER` — your DBmaestro server address, format `host:port` (e.g. `dop.dbmaestro.local:8017`), not a URL.
+- [ ] `CLI_VERSION` — DBmaestro CLI JAR version to download. Not required if the JAR is already pre-installed on the agent — but in that case you must set `agentJarPath` (on all three pipelines) to the JAR's actual path on the agent; its default (`$(Pipeline.Workspace)/DBmaestroAgent.jar`) only works when `CLI_VERSION` drove the download itself.
+- [ ] Authentication — pick one:
+  - **Using OIDC (default in this repo's YAML):** `DBMAESTRO_ACCESS_TOKEN_FILE_PATH` — path to the file containing the access token.
+  - **Not using OIDC:** edit `build-source-control.yml`, `upgrade-environment.yml`, and `build-git-changes.yml` to pass username/password parameters instead of `accessTokenFilePath` (check the exact parameter names on the relevant `dbmaestro-cicd` templates), then set `DBMAESTRO_USER` and `DBMAESTRO_PASSWORD` (secret) and reference them there.
+- [ ] `useSsl` — not a variable, hardcoded per YAML file: `'False'` by default in `build-source-control.yml`/`upgrade-environment.yml`, `'True'` in `build-git-changes.yml`. Edit the `useSsl:` line directly in whichever file doesn't match your DBmaestro server's actual SSL setting.
+
+## 8. Create the ADO pipeline definitions for the orchestrators
 
 1. Pipelines → New Pipeline → GitHub → select **your own** `example-ado-source-control` repo.
 2. Point it at `source-control-workflow.yml`. Save.
@@ -84,7 +95,7 @@ These are the downstream pipelines the orchestrators queue via `az pipelines run
 
    Every additional DBmaestro project's own source-control repo needs this same customization done again for its own wrapper files — these values aren't reusable across projects even within the same org.
 
-## 8. Grant queue permissions
+## 9. Grant queue permissions
 
 Repeat for the "Build and Precheck Package - Source Control", "Upgrade Environment", and "Build with Git Change Detection" pipelines:
 
@@ -96,7 +107,7 @@ Repeat for the "Build and Precheck Package - Source Control", "Upgrade Environme
 
 (Or grant both once at the project level: Project Settings → Pipelines → Settings/Security.)
 
-## 9. Create the four approval-gate environments
+## 10. Create the four approval-gate environments
 
 For each of `Integration-pre-approval`, `Integration-post-approval`, `Production-pre-approval`, `Production-post-approval`:
 
@@ -116,11 +127,11 @@ For each of `Integration-pre-approval`, `Integration-post-approval`, `Production
 | `Production-pre-approval` | approver2@dbmaestro.com |
 | `Production-post-approval` | approver2@dbmaestro.com |
 
-### 9a. First-run resource authorization
+### 10a. First-run resource authorization
 
 The first time a run reaches each environment, open it in the ADO UI and click **Permit** (optionally "Permit for all pipelines"). Expect this once per (pipeline, environment) pair — up to 8 prompts total across both workflows.
 
-## 10. Failure notifications
+## 11. Failure notifications
 
 1. Project Settings → Notifications → New subscription.
 2. Category: **Build**. Template: "A build completes."
@@ -131,6 +142,6 @@ The first time a run reaches each environment, open it in the ADO UI and click *
 
 Repeat for `Upgrade Environment` and `Build with Git Change Detection`.
 
-## 11. Done
+## 12. Done
 
 Push a commit to `example-ado-source-control` with a commit message like `v1.0.1; TaskID: V1.0.1` to trigger the source-control flow, or touch a file under `ad-hoc/` to trigger the ad-hoc flow.

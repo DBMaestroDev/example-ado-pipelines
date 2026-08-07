@@ -157,7 +157,7 @@ stages:
           agentJarPath: ${{ parameters.agentJarPath }}
           server: $(DBMAESTRO_SERVER)
           accessTokenFilePath: $(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)
-          useSsl: 'True'
+          useSsl: 'False'
           packageType: 'AdHoc'
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
