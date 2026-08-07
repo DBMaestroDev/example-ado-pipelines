@@ -76,11 +76,8 @@ These are the downstream pipelines the orchestrators queue via `az pipelines run
 Set these as Variables on each of the three pipelines from step 6 (or once in a shared Variable Group — Pipelines → Library → Variable groups — linked to all three):
 
 - [ ] `DBMAESTRO_SERVER` — your DBmaestro server address, format `host:port` (e.g. `dop.dbmaestro.local:8017`), not a URL.
-- [ ] `CLI_VERSION` — DBmaestro CLI JAR version to download. Not required if the JAR is already pre-installed on the agent — but in that case you must set `agentJarPath` (on all three pipelines) to the JAR's actual path on the agent; its default (`$(Pipeline.Workspace)/DBmaestroAgent.jar`) only works when `CLI_VERSION` drove the download itself.
-- [ ] Authentication — pick one:
-  - **Using OIDC (default in this repo's YAML):** `DBMAESTRO_ACCESS_TOKEN_FILE_PATH` — path to the file containing the access token.
-  - **Not using OIDC:** edit `build-source-control.yml`, `upgrade-environment.yml`, and `build-git-changes.yml` to pass username/password parameters instead of `accessTokenFilePath` (check the exact parameter names on the relevant `dbmaestro-cicd` templates), then set `DBMAESTRO_USER` and `DBMAESTRO_PASSWORD` (secret) and reference them there.
-- [ ] `useSsl` — not a variable, hardcoded per YAML file: `'False'` by default in `build-source-control.yml`/`upgrade-environment.yml`, `'True'` in `build-git-changes.yml`. Edit the `useSsl:` line directly in whichever file doesn't match your DBmaestro server's actual SSL setting.
+- [ ] `DBMAESTRO_ACCESS_TOKEN_FILE_PATH` — path to the file containing the access token.
+- [ ] `useSsl` — not a variable, hardcoded per YAML file: `'False'` by default in `build-source-control.yml`/`upgrade-environment.yml` anb `build-git-changes.yml`. Edit the `useSsl:` line directly if using SSL for the agent. 
 
 ## 8. Create the ADO pipeline definitions for the orchestrators
 

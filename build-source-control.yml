@@ -54,7 +54,7 @@ parameters:
     default: 'Task'
   - name: agentJarPath
     type: string
-    default: '$(Pipeline.Workspace)/DBmaestroAgent.jar'
+    default: 'C:\Program Files (x86)\DBmaestro\DOP Server\Agent\DBmaestroAgent.jar'
   - name: runnerPool
     type: string
     default: 'dbmaestro-windows'
