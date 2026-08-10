@@ -56,6 +56,9 @@ extends:
     adHocBuildPipelineId: '62'   # this repo's "Build with Git Change Detection" pipeline
     upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
+    sourceRepoName: 'DBMaestroDev/example-ado-source-control'
+    sourceRepoEndpoint: 'DBMaestroDev'
+    sourceRepoRef: 'refs/heads/main'
 ```
 
 Unlike `source-control-workflow.yml`'s wrapper, this one also needs the `dbmaestro-cicd` resource declared at the root level — the template's Build stage checks that repo out directly to run its own detection step (see below), and `resources.repositories` entries used anywhere in an `extends:` chain must be declared in the root file, not the template.

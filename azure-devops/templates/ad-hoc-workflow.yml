@@ -58,6 +58,18 @@ parameters:
   - name: adHocBuildPipelineId
     displayName: 'Pipeline ID of this repo''s "Build with Git Change Detection" pipeline (built from build-git-changes.yml)'
     type: string
+  - name: sourceRepoName
+    displayName: 'Source repo (org/name) that the downstream build-git-changes.yml pipeline should detect changes in and check out'
+    type: string
+    default: 'DBMaestroDev/example-ado-source-control'
+  - name: sourceRepoEndpoint
+    displayName: 'Service connection name for the source repo used by the downstream build-git-changes.yml pipeline'
+    type: string
+    default: 'DBMaestroDev'
+  - name: sourceRepoRef
+    displayName: 'Git ref of the source repo used by the downstream build-git-changes.yml pipeline'
+    type: string
+    default: 'refs/heads/main'
   - name: upgradePipelineId
     displayName: 'Pipeline ID of the shared "Upgrade Environment" pipeline'
     type: string
@@ -150,7 +162,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.adHocBuildPipelineId }}" `
-                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" sourceRepoName="${{ parameters.sourceRepoName }}" sourceRepoEndpoint="${{ parameters.sourceRepoEndpoint }}" sourceRepoRef="${{ parameters.sourceRepoRef }}" `
                 --query id -o tsv
               Write-Host "Queued ad-hoc build run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."

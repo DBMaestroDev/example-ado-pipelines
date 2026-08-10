@@ -24,7 +24,7 @@ Minimal implementation steps. See [`README.md`](./README.md) for full explanatio
 
 - [ ] `example-ado-pipelines` copied (e.g. forked) into **your own** GitHub org. Only `dbmaestro-cicd` stays in the `DBMaestroDev` org — this copy is yours.
 - [ ] A source-control repo created in that same org for **each individual DBmaestro project** (playing the role of `example-ado-source-control`) — every DBmaestro project needs its own copy of this repo, since a commit there drives that project's own release chain.
-- [ ] GitHub service connection "GitHub using Azure Pipelines app", connected to **your own** GitHub org (hosting your `example-ado-pipelines` and `example-ado-source-control` copies). Since both repos live in that same org, this one connection also covers the `adoPipelines`/`exampleAdoSourceControl` cross-repo resource entries — no separate connection needed.
+- [ ] GitHub service connection "GitHub using Azure Pipelines app", connected to **your own** GitHub org (hosting your `example-ado-pipelines` and `example-ado-source-control` copies). Since both repos live in that same org, this one connection also covers the `adoPipelines`/`sourceControlRepository` cross-repo resource entries — no separate connection needed.
 - [ ] GitHub service connection named exactly `dbmaestro-cicd`, authorized against `DBMaestroDev/dbmaestro-cicd`.
 - [ ] Self-hosted **Windows** agent registered in the `dbmaestro-windows` pool.
 - [ ] PowerShell 7+ (`pwsh`) installed on the agent; restart the agent service after installing.
@@ -89,6 +89,7 @@ Set these as Variables on each of the three pipelines from step 6 (or once in a 
    - `dBmaestroProjectName` → this DBmaestro project's name.
    - `buildPipelineId` / `upgradePipelineId` / `adHocBuildPipelineId` → the definition IDs noted in step 6.
    - `runnerPool` → your agent pool.
+   - `sourceRepoName` / `sourceRepoEndpoint` / `sourceRepoRef` (ad-hoc wrapper only) → your `example-ado-source-control` copy's `org/repo`, service connection name, and branch ref. These are forwarded through to `build-git-changes.yml`'s own `resources.repositories` entry, so it checks out and detects changes against your repo instead of this guide's example.
 
    Every additional DBmaestro project's own source-control repo needs this same customization done again for its own wrapper files — these values aren't reusable across projects even within the same org.
 
