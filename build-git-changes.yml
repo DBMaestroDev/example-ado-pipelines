@@ -8,10 +8,39 @@
 # dbmaestro-cicd, and both the Detect and Build stages are pointed at that
 # checkout path explicitly via sourcesPath/sourcesRepository parameters.
 #
-# Checkout folder naming (confirmed empirically, see NOTE in Detect stage):
-# every repo lands in a subfolder of $(Build.SourcesDirectory) named after its
-# actual repository name (DBMaestroDev/example-ado-source-control -> folder
+# sourceRepoName/sourceRepoEndpoint/sourceRepoRef CANNOT be used to
+# parameterize resources.repositories below - Azure Pipelines resolves
+# repository resources (name/endpoint/ref) before runtime parameter values
+# are bound, so a template expression there always fails to compile
+# ("A template expression is not allowed in this context"). Only a finite,
+# predefined set of source repos is supported (each its own static resource
+# below) - the PrepareSources stage picks which one to check out via a
+# compile-time ${{ if }}/${{ elseif }} chain keyed on sourceRepoName, and
+# fails clearly if it doesn't recognize the value. To support another repo:
+# add a new resources.repositories entry (with its own service connection)
+# and a matching branch in that if/elseif chain.
+#
+# sourceRepoRef stays fully dynamic despite the above: PrepareSources checks
+# out whichever static resource was selected, then reuses its persisted git
+# credentials to fetch/checkout the actual requested ref via script (the same
+# idiom this file already used for `git fetch --unshallow`). sourceRepoEndpoint
+# is now unused (kept only so existing callers passing it don't break) - each
+# predefined repo's endpoint is fixed in its own resources.repositories entry.
+#
+# Checkout folder naming (confirmed empirically): every repo lands in a
+# subfolder of $(Build.SourcesDirectory) named after its actual repository
+# name (DBMaestroDev/example-ado-source-control -> folder
 # "example-ado-source-control"), not the `repository:` alias declared below.
+#
+# The Build stage's build-multiple-packages.yml@dbmaestro-cicd template does
+# its own internal `checkout: ${{ parameters.sourcesRepository }}` step, but
+# its build steps run with workingDirectory: sourcesPath, decoupled from
+# where that checkout lands. Re-checking-out sourceControlRepository there
+# would reset it to the resource's default ref, clobbering the ref
+# PrepareSources already switched to - so the Build stage instead points
+# sourcesRepository at the harmless, already-checked-out dbmaestro-cicd
+# resource, and relies on sourcesPath (prepared once by PrepareSources) for
+# the real content.
 #
 # packageNames parameter: when a caller (e.g. ad-hoc-workflow.yml) has already
 # run its own git-diff detection, it can pass the result straight in via
@@ -28,19 +57,27 @@ resources:
       #ref: refs/tags/v1
     - repository: sourceControlRepository
       type: github
-      name: ${{ parameters.sourceRepoName }}
-      endpoint: ${{ parameters.sourceRepoEndpoint }}  # must match the service connection name exactly
-      ref: ${{ parameters.sourceRepoRef }}
+      name: DBMaestroDev/example-ado-source-control
+      endpoint: DBMaestroDev  # must match the service connection name exactly
+      ref: refs/heads/main
+    # Second example source repo, purely to demonstrate how to add one:
+    # replace name/endpoint with a real org/repo + service connection to
+    # actually use this branch of the PrepareSources if/elseif chain below.
+    - repository: sourceControlRepository2
+      type: github
+      name: DBMaestroDev/example-ado-source-control-2
+      endpoint: DBMaestroDev  # replace if the second repo needs a different service connection
+      ref: refs/heads/main
 
 parameters:
   - name: projectName
     type: string
   - name: sourceRepoName
-    displayName: 'Source repo (org/name) to detect changes in and check out for the build'
+    displayName: 'Source repo (org/name) to detect changes in and check out for the build - must match one of the static resources.repositories entries above (DBMaestroDev/example-ado-source-control or DBMaestroDev/example-ado-source-control-2 today), selected/validated in the PrepareSources stage'
     type: string
     default: 'DBMaestroDev/example-ado-source-control'
   - name: sourceRepoEndpoint
-    displayName: 'Service connection name for the source repo'
+    displayName: 'Unused - kept for backward compatibility with existing callers. The service connection is now fixed in the static sourceControlRepository resource above.'
     type: string
     default: 'DBMaestroDev'
   - name: sourceRepoRef
@@ -75,67 +112,96 @@ parameters:
 trigger: none
 
 stages:
+  # Always runs (even when packageNames skips Detect below) - this is the
+  # only place that checks out sourceControlRepository. It exists because the
+  # Build stage's build-multiple-packages.yml@dbmaestro-cicd template does its
+  # own internal checkout of whatever `sourcesRepository` alias it's given,
+  # which would reset HEAD back to the static resource's default ref
+  # (refs/heads/main) if pointed at sourceControlRepository directly -
+  # clobbering the ref switch below. So Build instead points sourcesRepository
+  # at the harmless dbmaestro-cicd resource and relies on this stage having
+  # already prepared the real content at sourcesPath.
+  - stage: PrepareSources
+    displayName: 'Prepare Source Repo Checkout'
+    jobs:
+      - job: Prepare
+        displayName: 'Checkout Source Repo At Requested Ref'
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          # Which static resource to check out is picked at compile time -
+          # resources.repositories entries can't be chosen dynamically, but a
+          # plain ${{ if }}/${{ elseif }} chain selecting between several
+          # already-declared ones is fine. Add another elseif branch (plus a
+          # matching resources.repositories entry above) to support a third
+          # repo. The final ${{ else }} fails clearly instead of silently
+          # building nothing/the wrong repo for an unrecognized sourceRepoName.
+          #
+          # No fetchDepth on these checkouts - omitting it entirely is what
+          # actually gets full history for this repository resource. Explicit
+          # fetchDepth: 0 is *documented* to also mean "full history", but for
+          # this GitHub resource type it was observed to still only fetch 1
+          # commit either way ("fatal: ambiguous argument 'HEAD~1': unknown
+          # revision"). See the explicit `git fetch --unshallow` step below,
+          # which is the real fix, not just a fallback.
+          - ${{ if eq(parameters.sourceRepoName, 'DBMaestroDev/example-ado-source-control') }}:
+              - checkout: sourceControlRepository
+                persistCredentials: true   # needed so the later scripted 'git fetch'
+                                            # steps below can authenticate - checkout
+                                            # credentials aren't persisted to later
+                                            # steps by default, and without this the
+                                            # fetch fails with "terminal prompts disabled"
+          - ${{ elseif eq(parameters.sourceRepoName, 'DBMaestroDev/example-ado-source-control-2') }}:
+              - checkout: sourceControlRepository2
+                persistCredentials: true
+          - ${{ else }}:
+              - pwsh: |
+                  Write-Error "sourceRepoName '${{ parameters.sourceRepoName }}' is not supported - add it as a new repository resource + a matching elseif branch here to support it."
+                  exit 1
+                displayName: 'Fail: unsupported sourceRepoName'
+
+          # This is the actual fix for the shallow-checkout behavior noted
+          # above, not just a defensive fallback: force full history so
+          # HEAD~1 resolves for the detectFromPush diff in the Detect stage.
+          # --unshallow errors harmlessly ("does not make sense") if the repo
+          # already has full history, so this is safe to always run
+          # regardless. Then, since the repository resource's `ref:` is
+          # necessarily static (refs/heads/main), move HEAD to whatever ref
+          # was actually requested at queue time - reusing the credentials
+          # persisted above rather than needing a separate PAT/service
+          # connection for this second fetch. $repoFolder is resolved the same
+          # way as the self-checkout path in azure-devops/templates/ad-hoc-workflow.yml
+          # (basename of the actual "Org/Repo" name, not the resource alias -
+          # see the checkout-folder-naming note above), and published as a
+          # stage output variable so Detect/Build can build their own
+          # sourcesPath without duplicating this logic.
+          - pwsh: |
+              $repoFolder = ("${{ parameters.sourceRepoName }}" -split '/')[-1]
+              $path = "$(Build.SourcesDirectory)/$repoFolder"
+              Set-Location $path
+              git fetch --unshallow 2>&1 | Write-Host
+              $LASTEXITCODE = 0
+              git fetch origin ${{ parameters.sourceRepoRef }} 2>&1 | Write-Host
+              git checkout FETCH_HEAD 2>&1 | Write-Host
+              Write-Host "Commit count after ref switch: $(git rev-list --count HEAD)"
+              Write-Host "##vso[task.setvariable variable=sourcesPath;isOutput=true]$path"
+            name: PrepareRef
+            displayName: 'Ensure full git history, check out requested ref, and resolve sourcesPath'
+
   # Skipped entirely when the caller already passed packageNames - see that
-  # parameter's description above. Everything below down to the Build stage
-  # stays inside this ${{ if }} block for exactly that reason.
+  # parameter's description above.
   - ${{ if eq(parameters.packageNames, '') }}:
       - stage: Detect
         displayName: 'Detect Changed Packages'
+        dependsOn: PrepareSources
+        variables:
+          sourcesPath: $[ stageDependencies.PrepareSources.Prepare.outputs['PrepareRef.sourcesPath'] ]
         jobs:
           - job: DetectChanges
             displayName: 'Detect Changed Packages'
             pool: ${{ parameters.runnerPool }}
             steps:
-              # No fetchDepth here - omitting it entirely is what actually gets
-              # full history for this repository resource. Explicit fetchDepth: 0
-              # is *documented* to also mean "full history", but for this GitHub
-              # resource type it was observed to still only fetch 1 commit either
-              # way - with fetchDepth: 0 AND with it omitted entirely ("fatal:
-              # ambiguous argument 'HEAD~1': unknown revision"). This looks like a
-              # hard shallow-checkout behavior for this resource type regardless
-              # of the setting, not something fetchDepth actually controls here -
-              # see the explicit `git fetch --unshallow` step below, which is the
-              # real fix, not just a fallback.
-              #
-              # Confirmed via the DEBUG step below: self (example-ado-pipelines) is
-              # checked out automatically even with no explicit `checkout: self`
-              # step, and every repo (including this one) lands in a subfolder of
-              # $(Build.SourcesDirectory) named after the repository's actual name
-              # (the basename of `name:` above) - NOT the `repository:` alias used
-              # for the checkout step/template refs. That's why sourcesPath below
-              # is ".../example-ado-source-control", not ".../sourceControlRepository".
-              - checkout: sourceControlRepository
-                persistCredentials: true   # needed so the later 'git fetch --unshallow'
-                                            # step below can authenticate - checkout
-                                            # credentials aren't persisted to later
-                                            # steps by default, and without this the
-                                            # fetch fails with "terminal prompts disabled"
-
               - checkout: dbmaestro-cicd
                 fetchDepth: 1
-
-              # This is the actual fix for the shallow-checkout behavior noted
-              # above, not just a defensive fallback: force full history so
-              # HEAD~1 resolves for the detectFromPush diff below. --unshallow
-              # errors harmlessly ("does not make sense") if the repo already has
-              # full history, so this is safe to always run regardless.
-              - pwsh: |
-                  Set-Location "$(Build.SourcesDirectory)/example-ado-source-control"
-                  git fetch --unshallow 2>&1 | Write-Host
-                  $LASTEXITCODE = 0
-                  Write-Host "Commit count after unshallow: $(git rev-list --count HEAD)"
-                displayName: 'Ensure full git history is available for diff'
-
-              # DEBUG: print where things actually landed, to confirm/adjust the
-              # sourcesPath assumption below. Safe to remove once checkout layout
-              # is confirmed stable.
-              - pwsh: |
-                  Write-Host "Build.SourcesDirectory = $(Build.SourcesDirectory)"
-                  Write-Host "--- Contents of Build.SourcesDirectory ---"
-                  Get-ChildItem -Force "$(Build.SourcesDirectory)" | Select-Object Name, Mode | Format-Table | Out-String | Write-Host
-                  Write-Host "--- Current location ---"
-                  Get-Location
-                displayName: 'DEBUG: List checkout contents'
 
               # detectFromPush (not baseRef) is the correct mode here: this checkout
               # is always 'main' itself (the ref: on the repository resource above),
@@ -147,7 +213,7 @@ stages:
                 parameters:
                   detectFromPush: true
                   useWindows: true
-                  sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
+                  sourcesPath: '$(sourcesPath)'  # resolved by PrepareSources - varies by which repo was selected
                   # Must match the Build stage's packagesFolder below (both default
                   # to 'ad-hoc') - detect-packages.ps1/.sh match changed files as
                   # "<packagesFolder>/<packageName>/...", so if these two ever
@@ -158,8 +224,12 @@ stages:
 
   - stage: Build
     displayName: 'Build Changed Packages'
-    ${{ if eq(parameters.packageNames, '') }}:
-      dependsOn: Detect
+    dependsOn:
+      - PrepareSources
+      - ${{ if eq(parameters.packageNames, '') }}:
+          - Detect
+    variables:
+      sourcesPath: $[ stageDependencies.PrepareSources.Prepare.outputs['PrepareRef.sourcesPath'] ]
     jobs:
       - template: azure-devops/templates/build-multiple-packages.yml@dbmaestro-cicd
         parameters:
@@ -173,8 +243,8 @@ stages:
           packageType: 'AdHoc'
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
-          sourcesRepository: sourceControlRepository
-          sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
+          sourcesRepository: dbmaestro-cicd
+          sourcesPath: '$(sourcesPath)'  # resolved by PrepareSources - varies by which repo was selected
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
           version: $(CLI_VERSION)

@@ -27,6 +27,8 @@ trigger:
                    # excluded here so an ad-hoc-only commit doesn't also trigger
                    # this workflow and fail at TaskID extraction (ad-hoc commits
                    # don't follow the "<version>; TaskID: <value>" convention).
+      - /*.yml   # root-level pipeline definitions (this file, ad-hoc-workflow.yml, etc.) -
+                 # changes to the pipeline code itself shouldn't trigger a release run
 
 resources:
   repositories:

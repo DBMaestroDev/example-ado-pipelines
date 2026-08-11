@@ -89,7 +89,8 @@ Set these as Variables on each of the three pipelines from step 6 (or once in a 
    - `dBmaestroProjectName` → this DBmaestro project's name.
    - `buildPipelineId` / `upgradePipelineId` / `adHocBuildPipelineId` → the definition IDs noted in step 6.
    - `runnerPool` → your agent pool.
-   - `sourceRepoName` / `sourceRepoEndpoint` / `sourceRepoRef` (ad-hoc wrapper only) → your `example-ado-source-control` copy's `org/repo`, service connection name, and branch ref. These are forwarded through to `build-git-changes.yml`'s own `resources.repositories` entry, so it checks out and detects changes against your repo instead of this guide's example.
+   - `sourceRepoRef` (ad-hoc wrapper only) → your desired branch/tag/commit ref. This one *is* forwarded all the way through to `build-git-changes.yml` and honored dynamically per run.
+   - `sourceRepoName` / `sourceRepoEndpoint` (ad-hoc wrapper only) → these are **not** enough on their own to repoint `build-git-changes.yml` at your repo: its `resources.repositories` entries for source repos are static (Azure Pipelines doesn't allow repository resources to be parameterized), so you must also edit/add an entry directly in `build-git-changes.yml` for your `org/repo` and service connection name, plus a matching `${{ elseif eq(parameters.sourceRepoName, '...') }}` branch in the `PrepareSources` stage's checkout selection. `build-git-changes.yml` ships with two example entries (`example-ado-source-control` and `example-ado-source-control-2`) showing that pattern. Keep the wrapper's `sourceRepoName` parameter matching one of the declared entries — `build-git-changes.yml` fails fast on an unrecognized value, to avoid silently building the wrong repo.
 
    Every additional DBmaestro project's own source-control repo needs this same customization done again for its own wrapper files — these values aren't reusable across projects even within the same org.
 
