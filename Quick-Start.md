@@ -106,29 +106,33 @@ Repeat for the "Build and Precheck Package - Source Control", "Upgrade Environme
 
 (Or grant both once at the project level: Project Settings → Pipelines → Settings/Security.)
 
-## 10. Create the four approval-gate environments
+## 10. Create the eight approval-gate environments
 
-For each of `Integration-pre-approval`, `Integration-post-approval`, `Production-pre-approval`, `Production-post-approval`:
+For each of `Release-Source-pre-approval`, `Release-Source-post-approval`, `UAT_Env_1-pre-approval`, `UAT_Env_1-post-approval`, `Pre_Prod_Env_1-pre-approval`, `Pre_Prod_Env_1-post-approval`, `Prod_Env_1-pre-approval`, `Prod_Env_1-post-approval`:
 
 1. Pipelines → Environments → New environment.
 2. Name it exactly as listed above. Resource: **None**.
 3. Create → "⋮" → **Approvals and checks** → Add check → **Approvals**.
 4. Add the approver(s) and save.
 
-> **Different names?** Override `integrationPreApprovalEnvironment`/`integrationPostApprovalEnvironment`/`productionPreApprovalEnvironment`/`productionPostApprovalEnvironment` in the wrapper YAML's `extends: parameters:` block — no template edit needed.
+> **Different names?** Override `releaseSourcePreApprovalEnvironment`/`releaseSourcePostApprovalEnvironment`/`uatEnv1PreApprovalEnvironment`/`uatEnv1PostApprovalEnvironment`/`preProdEnv1PreApprovalEnvironment`/`preProdEnv1PostApprovalEnvironment`/`prodEnv1PreApprovalEnvironment`/`prodEnv1PostApprovalEnvironment` in the wrapper YAML's `extends: parameters:` block — no template edit needed.
 >
-> **More gates?** (e.g. an extra QA environment) That does require editing `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml` directly — add a new stage, wire its `dependsOn`, and add a parameter for its environment name. This affects every DBmaestro project's source-control repo that extends the template.
+> **More gates?** (e.g. an extra environment ahead of Prod_Env_1) That does require editing `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml` directly — add a new stage, wire its `dependsOn`, and add a parameter for its environment name. This affects every DBmaestro project's source-control repo that extends the template.
 
 | Environment | Approver |
 |---|---|
-| `Integration-pre-approval` | approver1@dbmaestro.com |
-| `Integration-post-approval` | approver1@dbmaestro.com |
-| `Production-pre-approval` | approver2@dbmaestro.com |
-| `Production-post-approval` | approver2@dbmaestro.com |
+| `Release-Source-pre-approval` | approver1@dbmaestro.com |
+| `Release-Source-post-approval` | approver1@dbmaestro.com |
+| `UAT_Env_1-pre-approval` | approver1@dbmaestro.com |
+| `UAT_Env_1-post-approval` | approver1@dbmaestro.com |
+| `Pre_Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
+| `Pre_Prod_Env_1-post-approval` | approver2@dbmaestro.com |
+| `Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
+| `Prod_Env_1-post-approval` | approver2@dbmaestro.com |
 
 ### 10a. First-run resource authorization
 
-The first time a run reaches each environment, open it in the ADO UI and click **Permit** (optionally "Permit for all pipelines"). Expect this once per (pipeline, environment) pair — up to 8 prompts total across both workflows.
+The first time a run reaches each environment, open it in the ADO UI and click **Permit** (optionally "Permit for all pipelines"). Expect this once per (pipeline, environment) pair — up to 16 prompts total across both workflows.
 
 ## 11. Failure notifications
 

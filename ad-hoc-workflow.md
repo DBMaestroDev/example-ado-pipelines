@@ -22,7 +22,7 @@ The other differences all follow from having no TaskID to read:
 
 - **No commit message convention.** Any commit message works. Instead of extracting a value, this workflow's Build stage runs its own git-diff detection to figure out which package(s) actually changed.
 - **Package names come from detection, not a parameter.** Everywhere `source-control-workflow.yml` uses the extracted TaskID as `packageName`/`packageNames`, this workflow uses whatever the detection step found.
-- **Approval gates are reused, not duplicated.** The same four environments (`Integration-pre-approval`, etc.) back both workflows' gates — same approvers, same "is it OK to touch Integration/Production" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
+- **Approval gates are reused, not duplicated.** The same eight environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, etc. — one pre/post pair per environment across Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1) back both workflows' gates — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
@@ -69,24 +69,30 @@ Unlike `source-control-workflow.yml`'s wrapper, this one also needs the `dbmaest
 
 1. **Build** — checks out `self` and `dbmaestro-cicd`, resolves where `self` actually landed (see below), detects changed packages via git-diff, and queues the "Build with Git Change Detection" pipeline (fire-and-forget), passing the detected package names directly.
 
-After Build, the chain splits into two **independent** legs — Integration and Production — that both become available as soon as Build succeeds, rather than running one after the other. Environment selection happens purely through which leg's pre-approval gate gets approved:
+After Build, the chain splits into two **independent** legs — Release Source, and a sequential 3-environment sub-chain covering UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 — that both become available as soon as Build succeeds, rather than running one after the other. Environment selection happens purely through which leg's (first) pre-approval gate gets approved:
 
-- **Integration leg:**
-  2. **Integration pre-approval gate** — Environment `Integration-pre-approval`. Skipped entirely if detection found nothing to build (see section 5).
-  3. **Upgrade (Integration)** — queues "Upgrade Environment" with `targetEnvironment=Integration` and the detected package names (fire-and-forget).
-  4. **Integration post-approval gate** — Environment `Integration-post-approval`.
-- **Production leg:**
-  2. **Production pre-approval gate** — Environment `Production-pre-approval`. Also depends only on Build, and is skipped entirely if detection found nothing to build (same `has_packages` check as the Integration leg — see section 5).
-  3. **Upgrade (Production)** — queues "Upgrade Environment" with `targetEnvironment=Production` and the detected package names (fire-and-forget).
-  4. **Production post-approval gate** — Environment `Production-post-approval`. Final confirmation for that leg.
+- **Release Source leg:**
+  2. **Release Source pre-approval gate** — Environment `Release-Source-pre-approval`. Skipped entirely if detection found nothing to build (see section 5).
+  3. **Upgrade (Release Source)** — queues "Upgrade Environment" with `targetEnvironment=Release Source` and the detected package names (fire-and-forget).
+  4. **Release Source post-approval gate** — Environment `Release-Source-post-approval`.
+- **UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 leg:** a sequential 3-environment sub-chain; each environment's own pre-approval → Upgrade → post-approval trio depends on the previous environment's post-approval gate:
+  2. **UAT_Env_1 pre-approval gate** — Environment `UAT_Env_1-pre-approval`. Depends only on Build, and is skipped entirely if detection found nothing to build (same `has_packages` check as the Release Source leg — see section 5).
+  3. **Upgrade (UAT_Env_1)** — queues "Upgrade Environment" with `targetEnvironment=UAT_Env_1` and the detected package names (fire-and-forget).
+  4. **UAT_Env_1 post-approval gate** — Environment `UAT_Env_1-post-approval`.
+  5. **Pre_Prod_Env_1 pre-approval gate** — Environment `Pre_Prod_Env_1-pre-approval`. Depends on the UAT_Env_1 post-approval gate.
+  6. **Upgrade (Pre_Prod_Env_1)** — queues "Upgrade Environment" with `targetEnvironment=Pre_Prod_Env_1` and the detected package names (fire-and-forget).
+  7. **Pre_Prod_Env_1 post-approval gate** — Environment `Pre_Prod_Env_1-post-approval`.
+  8. **Prod_Env_1 pre-approval gate** — Environment `Prod_Env_1-pre-approval`. Depends on the Pre_Prod_Env_1 post-approval gate.
+  9. **Upgrade (Prod_Env_1)** — queues "Upgrade Environment" with `targetEnvironment=Prod_Env_1` and the detected package names (fire-and-forget).
+  10. **Prod_Env_1 post-approval gate** — Environment `Prod_Env_1-post-approval`. Final confirmation for that leg.
 
-Both pre-approval gates open at the same time once Build finishes. Approving only Integration's gate runs only that leg; approving only Production's runs only that leg (in either order); approving both runs both legs concurrently. There is no `dependsOn` between the two legs.
+Both legs' first pre-approval gates (Release Source and UAT_Env_1) open at the same time once Build finishes. Approving only the Release Source gate runs only that leg; approving only the UAT_Env_1 gate runs the full UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 sub-chain in sequence (in either order relative to the other leg); approving both runs both legs concurrently. There is no `dependsOn` between the Release Source leg and the UAT_Env_1 leg.
 
 Each leg's own gates follow the exact same pattern, fire-and-forget rationale, and manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md`'s "Fire-and-forget design" section for the full explanation; it isn't repeated here.
 
 ### 3a. Closing out a run that only deploys one environment
 
-Because the two legs are independent, a run where you only ever wanted, say, Integration will still have Production's pre-approval gate sitting there, pending, indefinitely. This isn't a bug to fix in the YAML — it's inherent to how Azure DevOps evaluates multi-stage pipelines: a stage only becomes eligible to run once *every* stage it depends on has reached a terminal state (Succeeded, Failed, Skipped, or Rejected), and "awaiting manual approval" isn't terminal. There is no `condition:`/`dependsOn:` construct that lets the overall run finish while a sibling gate is neither approved, rejected, nor timed out — so an unused leg's gate has to be resolved one way or another before the run itself can close.
+Because the two legs are independent, a run where you only ever wanted, say, the Release Source leg will still have the UAT_Env_1 leg's pre-approval gate sitting there, pending, indefinitely — and, if that gate is later approved, the rest of that leg's chain through Pre_Prod_Env_1 and Prod_Env_1 pending behind it. This isn't a bug to fix in the YAML — it's inherent to how Azure DevOps evaluates multi-stage pipelines: a stage only becomes eligible to run once *every* stage it depends on has reached a terminal state (Succeeded, Failed, Skipped, or Rejected), and "awaiting manual approval" isn't terminal. There is no `condition:`/`dependsOn:` construct that lets the overall run finish while a sibling gate is neither approved, rejected, nor timed out — so an unused leg's gate has to be resolved one way or another before the run itself can close.
 
 Three ways to resolve it, none of which require a YAML change:
 
@@ -94,7 +100,7 @@ Three ways to resolve it, none of which require a YAML change:
 2. **Configure a timeout on that Environment's approval check.** Environments → the environment in question → "⋮" → Approvals and checks → edit the Approval check's timeout (e.g. 1 hour instead of the default). An un-acted-on gate then auto-rejects on its own instead of waiting indefinitely — useful if leaving a leg permanently unresolved becomes a recurring pattern rather than a one-off.
 3. **Cancel the whole run.** A blunter option if neither of the above fits — stops everything, including the leg that already succeeded, rather than resolving just the unused gate.
 
-**Caveat that applies to options 1 and 2 either way:** a rejected or timed-out approval counts as a *stage failure* in Azure DevOps' multi-stage YAML pipelines — there's no "partially succeeded" run outcome here. So a run where Integration deployed successfully and Production's gate was deliberately rejected will still show up in the Runs list, and in failure-notification emails (`README.md` section 9), as **Failed** overall. Anyone reviewing run status or failure notifications for this pipeline needs to check *which* stage actually failed before assuming something broke — a rejected/unused leg looks identical, at the run-result level, to a genuine failure.
+**Caveat that applies to options 1 and 2 either way:** a rejected or timed-out approval counts as a *stage failure* in Azure DevOps' multi-stage YAML pipelines — there's no "partially succeeded" run outcome here. So a run where the Release Source leg deployed successfully and the UAT_Env_1 leg's gate was deliberately rejected will still show up in the Runs list, and in failure-notification emails (`README.md` section 9), as **Failed** overall. Anyone reviewing run status or failure notifications for this pipeline needs to check *which* stage actually failed before assuming something broke — a rejected/unused leg looks identical, at the run-result level, to a genuine failure.
 
 No decision has been made yet on which of these three to standardize on; for now, resolve it however fits the situation.
 
@@ -132,7 +138,7 @@ If a push touches `ad-hoc/*` but git-diff finds no actual package changes (e.g. 
 condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
 ```
 
-Both `IntegrationPreApproval` and `ProductionPreApproval` carry this exact condition independently — since the two legs no longer depend on each other, Production can't just inherit the check transitively through Integration's stage the way it could when the chain was strictly sequential.
+Both `ReleaseSourcePreApproval` and `UatEnv1PreApproval` carry this exact condition independently — since the two legs don't depend on each other, the UAT_Env_1 leg can't just inherit the check transitively through the Release Source leg's stage the way it could when the chain was strictly sequential. (`PreProdEnv1PreApproval` and `ProdEnv1PreApproval`, further down the UAT_Env_1 leg's own sequential sub-chain, do inherit it transitively through their own `dependsOn`.)
 
 ### The `dependencies` vs `stageDependencies` gotcha
 
@@ -151,16 +157,16 @@ Note where the job name moves: inside the `outputs[]` key for `condition:`, but 
 2. Confirm `ad-hoc-workflow.yml` triggers, the Build stage detects the changed package(s), and the "Build with Git Change Detection" pipeline (62) is queued with those package names.
 3. Confirm the main `source-control-workflow.yml` orchestrator did **not** also trigger from the same commit.
 4. Check that build pipeline's run and confirm it built the expected package(s).
-5. Confirm **both** the Integration and Production pre-approval gates become pending (not skipped) at the same time, right after Build finishes — this is the "both legs open in parallel" behavior.
-6. Approve only the Integration pre-approval gate first, and confirm the Production leg stays pending/untouched (its Upgrade and post-approval stages haven't started) while the Integration leg proceeds.
-7. Confirm the Upgrade (Integration) stage queues "Upgrade Environment" with the detected package names; check that run succeeded, then approve Integration post-approval.
-8. Approve the Production pre-approval gate, confirm Upgrade (Production) queues and succeeds, then approve Production post-approval to finish that leg.
+5. Confirm **both** the Release Source and UAT_Env_1 pre-approval gates become pending (not skipped) at the same time, right after Build finishes — this is the "both legs open in parallel" behavior.
+6. Approve only the Release Source pre-approval gate first, and confirm the UAT_Env_1 leg stays pending/untouched (its Upgrade and post-approval stages, and the downstream Pre_Prod_Env_1/Prod_Env_1 stages, haven't started) while the Release Source leg proceeds.
+7. Confirm the Upgrade (Release Source) stage queues "Upgrade Environment" with the detected package names; check that run succeeded, then approve Release Source post-approval.
+8. Approve the UAT_Env_1 pre-approval gate, confirm Upgrade (UAT_Env_1) queues and succeeds, then approve UAT_Env_1 post-approval; repeat the same pre-approval → upgrade → post-approval pattern for Pre_Prod_Env_1 and then Prod_Env_1 to finish that leg.
 
 ## 7. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Integration pre-approval gate (or everything after it) is skipped even though a package was clearly detected and built | The stage `condition:` is using `stageDependencies` instead of `dependencies` — see section 5's syntax table. Check the run's "Condition evaluation" panel on the skipped stage; `Expanded: and(True, eq(Null, 'true')))` is the signature of this exact bug. |
+| The Release Source or UAT_Env_1 pre-approval gate (or everything after it) is skipped even though a package was clearly detected and built | The stage `condition:` is using `stageDependencies` instead of `dependencies` — see section 5's syntax table. Check the run's "Condition evaluation" panel on the skipped stage; `Expanded: and(True, eq(Null, 'true')))` is the signature of this exact bug. |
 | "No packages detected" even though a file under `ad-hoc/` genuinely changed | Confirm `packagesFolder` matches between this workflow's parameters and however the change is laid out in the repo (default `'ad-hoc'`) — `detect-packages.ps1`/`.sh` match changed files as `"<packagesFolder>/<packageName>/..."`, so a mismatch here silently finds nothing. |
 | `Set-Location : Cannot find path '...'` in the Build stage | The dynamically-resolved `selfSourcesPath` (section 3) didn't compute correctly — confirm `$(Build.Repository.Name)` for this repo is genuinely `Org/Repo` shaped, and that both `checkout: self` and `checkout: dbmaestro-cicd` are present (the nested-checkout-folder behavior only applies once 2+ repos are checked out in the job). |
 | The build pipeline (62) tried to build a package literally named `None` | The `$pkgNames` empty-string guard (section 4) is missing or was removed from the Build stage's queue step — `packages_list` is the literal string `"None"` when nothing was detected, and must not be forwarded as-is. |
