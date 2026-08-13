@@ -26,15 +26,27 @@ resources:
       endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
       ref: refs/heads/UseSSL_False
       #ref: refs/tags/v1
-    - repository: exampleAdoSourceControl
+    - repository: sourceControlRepository
       type: github
-      name: DBMaestroDev/example-ado-source-control
-      endpoint: 'DBMaestroDev'  # must match the service connection name exactly
-      ref: refs/heads/main
+      name: ${{ parameters.sourceRepoName }}
+      endpoint: ${{ parameters.sourceRepoEndpoint }}  # must match the service connection name exactly
+      ref: ${{ parameters.sourceRepoRef }}
 
 parameters:
   - name: projectName
     type: string
+  - name: sourceRepoName
+    displayName: 'Source repo (org/name) to detect changes in and check out for the build'
+    type: string
+    default: 'DBMaestroDev/example-ado-source-control'
+  - name: sourceRepoEndpoint
+    displayName: 'Service connection name for the source repo'
+    type: string
+    default: 'DBMaestroDev'
+  - name: sourceRepoRef
+    displayName: 'Git ref of the source repo to check out'
+    type: string
+    default: 'refs/heads/main'
   - name: packagesFolder
     type: string
     default: 'ad-hoc'
@@ -91,8 +103,8 @@ stages:
               # $(Build.SourcesDirectory) named after the repository's actual name
               # (the basename of `name:` above) - NOT the `repository:` alias used
               # for the checkout step/template refs. That's why sourcesPath below
-              # is ".../example-ado-source-control", not ".../exampleAdoSourceControl".
-              - checkout: exampleAdoSourceControl
+              # is ".../example-ado-source-control", not ".../sourceControlRepository".
+              - checkout: sourceControlRepository
                 persistCredentials: true   # needed so the later 'git fetch --unshallow'
                                             # step below can authenticate - checkout
                                             # credentials aren't persisted to later
@@ -161,7 +173,7 @@ stages:
           packageType: 'AdHoc'
           runnerPool: ${{ parameters.runnerPool }}
           useWindows: true
-          sourcesRepository: exampleAdoSourceControl
+          sourcesRepository: sourceControlRepository
           sourcesPath: '$(Build.SourcesDirectory)/example-ado-source-control'
           # CLI_VERSION pipeline variable controls JAR download. Set in pipeline Variables or a Variable Group.
           # Leave empty if the JAR is pre-installed on the runner.
