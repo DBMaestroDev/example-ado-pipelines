@@ -4,7 +4,7 @@
 # in this repo - Azure DevOps requires a self-triggered pipeline's YAML to
 # live in the same repo whose pushes trigger it, so a thin trigger file still
 # has to exist in every source-control repo. But with multiple source-control
-# repos sharing this one ado-pipelines repo, the actual 7-stage release chain
+# repos sharing this one ado-pipelines repo, the actual 13-stage release chain
 # below lives here exactly once via `extends:`, instead of being copy-pasted
 # (and re-fixed) into every source-control repo. See
 # azure-devops/templates/ad-hoc-workflow.yml's usage comment for the wrapper
@@ -12,9 +12,11 @@
 # pointing at this file and passing buildPipelineId instead of
 # adHocBuildPipelineId/packagesFolder.
 #
-# Chain: Build (extract TaskID from commit + queue) -> Integration
-# pre-approval -> Upgrade Integration -> Integration post-approval ->
-# Production pre-approval -> Upgrade Production -> Production
+# Chain: Build (extract TaskID from commit + queue) -> Release Source
+# pre-approval -> Upgrade Release Source -> Release Source post-approval ->
+# UAT_Env_1 pre-approval -> Upgrade UAT_Env_1 -> UAT_Env_1 post-approval ->
+# Pre_Prod_Env_1 pre-approval -> Upgrade Pre_Prod_Env_1 -> Pre_Prod_Env_1
+# post-approval -> Prod_Env_1 pre-approval -> Upgrade Prod_Env_1 -> Prod_Env_1
 # post-approval. Each gate is a separate Azure DevOps Environment with a
 # manual Approval check configured in the ADO UI (Pipelines -> Environments).
 # Swapping the approver for any single gate never requires touching this
@@ -72,19 +74,31 @@ parameters:
   - name: runnerPool
     displayName: 'Agent pool for both this workflow''s own jobs and the downstream pipelines it queues'
     type: string
-    default: 'dbmaestro-windows'
-  - name: integrationPreApprovalEnvironment
+    default: 'DBMaestro'
+  - name: releaseSourcePreApprovalEnvironment
     type: string
-    default: 'Integration-pre-approval'
-  - name: integrationPostApprovalEnvironment
+    default: 'Release-Source-pre-approval'
+  - name: releaseSourcePostApprovalEnvironment
     type: string
-    default: 'Integration-post-approval'
-  - name: productionPreApprovalEnvironment
+    default: 'Release-Source-post-approval'
+  - name: uatEnv1PreApprovalEnvironment
     type: string
-    default: 'Production-pre-approval'
-  - name: productionPostApprovalEnvironment
+    default: 'UAT_Env_1-pre-approval'
+  - name: uatEnv1PostApprovalEnvironment
     type: string
-    default: 'Production-post-approval'
+    default: 'UAT_Env_1-post-approval'
+  - name: preProdEnv1PreApprovalEnvironment
+    type: string
+    default: 'Pre_Prod_Env_1-pre-approval'
+  - name: preProdEnv1PostApprovalEnvironment
+    type: string
+    default: 'Pre_Prod_Env_1-post-approval'
+  - name: prodEnv1PreApprovalEnvironment
+    type: string
+    default: 'Prod_Env_1-pre-approval'
+  - name: prodEnv1PostApprovalEnvironment
+    type: string
+    default: 'Prod_Env_1-post-approval'
 
 stages:
   # ------------------------------------------------------------------
@@ -159,33 +173,33 @@ stages:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
   # ------------------------------------------------------------------
-  - stage: IntegrationPreApproval
-    displayName: 'Integration - Pre-Approval Gate'
+  - stage: ReleaseSourcePreApproval
+    displayName: 'Release Source - Pre-Approval Gate'
     dependsOn: Build
     condition: succeeded()
     jobs:
-      - deployment: IntegrationPreApprovalGate
-        displayName: 'Await Integration pre-approval'
-        environment: ${{ parameters.integrationPreApprovalEnvironment }}
+      - deployment: ReleaseSourcePreApprovalGate
+        displayName: 'Await Release Source pre-approval'
+        environment: ${{ parameters.releaseSourcePreApprovalEnvironment }}
         pool: ${{ parameters.runnerPool }}
         strategy:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Integration pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "Release Source pre-approval granted - proceeding to upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
-  - stage: UpgradeIntegration
-    displayName: 'Upgrade - Integration'
+  - stage: UpgradeReleaseSource
+    displayName: 'Upgrade - Release Source'
     dependsOn:
-      - IntegrationPreApproval
+      - ReleaseSourcePreApproval
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
       packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
     jobs:
-      - job: UpgradeIntegration
+      - job: UpgradeReleaseSource
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
@@ -200,7 +214,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Integration" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Release Source" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -215,58 +229,58 @@ stages:
               # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Integration upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   Write-Host "##vso[task.logissue type=error]Release Source upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
               #   exit 1
               # }
-            displayName: 'Queue: Upgrade Environment - Integration (fire-and-forget)'
+            displayName: 'Queue: Upgrade Environment - Release Source (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
   # ------------------------------------------------------------------
-  - stage: IntegrationPostApproval
-    displayName: 'Integration - Post-Approval Gate'
-    dependsOn: UpgradeIntegration
+  - stage: ReleaseSourcePostApproval
+    displayName: 'Release Source - Post-Approval Gate'
+    dependsOn: UpgradeReleaseSource
     condition: succeeded()
     jobs:
-      - deployment: IntegrationPostApprovalGate
-        displayName: 'Confirm Integration upgrade'
-        environment: ${{ parameters.integrationPostApprovalEnvironment }}
+      - deployment: ReleaseSourcePostApprovalGate
+        displayName: 'Confirm Release Source upgrade'
+        environment: ${{ parameters.releaseSourcePostApprovalEnvironment }}
         pool: ${{ parameters.runnerPool }}
         strategy:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Integration upgrade confirmed."
+                - pwsh: Write-Host "Release Source upgrade confirmed."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
-  - stage: ProductionPreApproval
-    displayName: 'Production - Pre-Approval Gate'
-    dependsOn: IntegrationPostApproval
+  - stage: UatEnv1PreApproval
+    displayName: 'UAT_Env_1 - Pre-Approval Gate'
+    dependsOn: ReleaseSourcePostApproval
     condition: succeeded()
     jobs:
-      - deployment: ProductionPreApprovalGate
-        displayName: 'Await Production pre-approval'
-        environment: ${{ parameters.productionPreApprovalEnvironment }}
+      - deployment: UatEnv1PreApprovalGate
+        displayName: 'Await UAT_Env_1 pre-approval'
+        environment: ${{ parameters.uatEnv1PreApprovalEnvironment }}
         pool: ${{ parameters.runnerPool }}
         strategy:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Production pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "UAT_Env_1 pre-approval granted - proceeding to upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
-  - stage: UpgradeProduction
-    displayName: 'Upgrade - Production'
+  - stage: UpgradeUatEnv1
+    displayName: 'Upgrade - UAT_Env_1'
     dependsOn:
-      - ProductionPreApproval
+      - UatEnv1PreApproval
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
       packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
     jobs:
-      - job: UpgradeProduction
+      - job: UpgradeUatEnv1
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
@@ -281,7 +295,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Production" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="UAT_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -296,26 +310,188 @@ stages:
               # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Production upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   Write-Host "##vso[task.logissue type=error]UAT_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
               #   exit 1
               # }
-            displayName: 'Queue: Upgrade Environment - Production (fire-and-forget)'
+            displayName: 'Queue: Upgrade Environment - UAT_Env_1 (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
   # ------------------------------------------------------------------
-  - stage: ProductionPostApproval
-    displayName: 'Production - Post-Approval Gate (Finalize)'
-    dependsOn: UpgradeProduction
+  - stage: UatEnv1PostApproval
+    displayName: 'UAT_Env_1 - Post-Approval Gate'
+    dependsOn: UpgradeUatEnv1
     condition: succeeded()
     jobs:
-      - deployment: ProductionPostApprovalGate
+      - deployment: UatEnv1PostApprovalGate
+        displayName: 'Confirm UAT_Env_1 upgrade'
+        environment: ${{ parameters.uatEnv1PostApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "UAT_Env_1 upgrade confirmed."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: PreProdEnv1PreApproval
+    displayName: 'Pre_Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: UatEnv1PostApproval
+    condition: succeeded()
+    jobs:
+      - deployment: PreProdEnv1PreApprovalGate
+        displayName: 'Await Pre_Prod_Env_1 pre-approval'
+        environment: ${{ parameters.preProdEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Pre_Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradePreProdEnv1
+    displayName: 'Upgrade - Pre_Prod_Env_1'
+    dependsOn:
+      - PreProdEnv1PreApproval
+      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+    jobs:
+      - job: UpgradePreProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              # Authenticate via env var rather than piping into 'az devops login' -
+              # on Windows, 'az' is a .cmd wrapper, and piping a token into it from
+              # PowerShell unreliably loses the stdin content across that wrapper.
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              $runId = az pipelines run `
+                --organization "${{ parameters.targetADOOrganization }}" `
+                --project "${{ parameters.targetADOProject }}" `
+                --id "${{ parameters.upgradePipelineId }}" `
+                --parameters targetEnvironment="Pre_Prod_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --query id -o tsv
+              Write-Host "Queued upgrade run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of file. ---
+              # do {
+              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Pre_Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
+            displayName: 'Queue: Upgrade Environment - Pre_Prod_Env_1 (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # ------------------------------------------------------------------
+  - stage: PreProdEnv1PostApproval
+    displayName: 'Pre_Prod_Env_1 - Post-Approval Gate'
+    dependsOn: UpgradePreProdEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: PreProdEnv1PostApprovalGate
+        displayName: 'Confirm Pre_Prod_Env_1 upgrade'
+        environment: ${{ parameters.preProdEnv1PostApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Pre_Prod_Env_1 upgrade confirmed."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: ProdEnv1PreApproval
+    displayName: 'Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: PreProdEnv1PostApproval
+    condition: succeeded()
+    jobs:
+      - deployment: ProdEnv1PreApprovalGate
+        displayName: 'Await Prod_Env_1 pre-approval'
+        environment: ${{ parameters.prodEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeProdEnv1
+    displayName: 'Upgrade - Prod_Env_1'
+    dependsOn:
+      - ProdEnv1PreApproval
+      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+    jobs:
+      - job: UpgradeProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              az extension add --name azure-devops --only-show-errors
+              # Authenticate via env var rather than piping into 'az devops login' -
+              # on Windows, 'az' is a .cmd wrapper, and piping a token into it from
+              # PowerShell unreliably loses the stdin content across that wrapper.
+              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
+
+              $runId = az pipelines run `
+                --organization "${{ parameters.targetADOOrganization }}" `
+                --project "${{ parameters.targetADOProject }}" `
+                --id "${{ parameters.upgradePipelineId }}" `
+                --parameters targetEnvironment="Prod_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --query id -o tsv
+              Write-Host "Queued upgrade run: $runId"
+              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
+              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of file. ---
+              # do {
+              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
+            displayName: 'Queue: Upgrade Environment - Prod_Env_1 (fire-and-forget)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # ------------------------------------------------------------------
+  - stage: ProdEnv1PostApproval
+    displayName: 'Prod_Env_1 - Post-Approval Gate (Finalize)'
+    dependsOn: UpgradeProdEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: ProdEnv1PostApprovalGate
         displayName: 'Finalize workflow'
-        environment: ${{ parameters.productionPostApprovalEnvironment }}
+        environment: ${{ parameters.prodEnv1PostApprovalEnvironment }}
         pool: ${{ parameters.runnerPool }}
         strategy:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Production upgrade confirmed. Workflow complete."
+                - pwsh: Write-Host "Prod_Env_1 upgrade confirmed. Workflow complete."
                   displayName: 'Gate passed'

@@ -1,6 +1,6 @@
 # Getting Notified When an Approval Is Needed
 
-*Companion note to README.md — covers how approvers (approver1@dbmaestro.com, approver2@dbmaestro.com) find out when one of the four gates (`Integration-pre-approval`, `Integration-post-approval`, `Production-pre-approval`, `Production-post-approval`) is waiting on them.*
+*Companion note to README.md — covers how approvers (approver1@dbmaestro.com, approver2@dbmaestro.com) find out when one of the eight gates (`Release-Source-pre-approval`, `Release-Source-post-approval`, `UAT_Env_1-pre-approval`, `UAT_Env_1-post-approval`, `Pre_Prod_Env_1-pre-approval`, `Pre_Prod_Env_1-post-approval`, `Prod_Env_1-pre-approval`, `Prod_Env_1-post-approval`) is waiting on them.*
 
 There are two independent layers. They can be used together.
 
@@ -10,7 +10,7 @@ Azure DevOps ships a built-in personal notification template for YAML pipelines 
 
 - Delivery goes to the approver's own registered email address — no admin configuration needed.
 - Each approver can verify or adjust it themselves: avatar icon (top right) → **Notifications** → **Personal notifications** → find it under the **Pipelines** category → confirm the toggle is on.
-- Because approver1@dbmaestro.com and approver2@dbmaestro.com are individual accounts, this alone is usually enough to cover the four gates in this workflow.
+- Because approver1@dbmaestro.com and approver2@dbmaestro.com are individual accounts, this alone is usually enough to cover the eight gates in this workflow.
 
 ## 2. Project-level subscription (optional — for a shared address)
 
@@ -18,7 +18,7 @@ If you also want approval-pending emails to land in a shared inbox or distributi
 
 1. Project Settings (`Example` project) → **Notifications** → **New subscription**.
 2. Template: **"Run stage waiting for approval."**
-3. Filter: **Environment name** — set to one of `Integration-pre-approval`, `Integration-post-approval`, `Production-pre-approval`, `Production-post-approval` if you want it scoped to a specific gate, or leave unfiltered to cover all four.
+3. Filter: **Environment name** — set to one of `Release-Source-pre-approval`, `Release-Source-post-approval`, `UAT_Env_1-pre-approval`, `UAT_Env_1-post-approval`, `Pre_Prod_Env_1-pre-approval`, `Pre_Prod_Env_1-post-approval`, `Prod_Env_1-pre-approval`, `Prod_Env_1-post-approval` if you want it scoped to a specific gate, or leave unfiltered to cover all eight.
 4. Deliver to → **Custom email address** → e.g. `devops@dbmaestro.com`.
 5. Save.
 

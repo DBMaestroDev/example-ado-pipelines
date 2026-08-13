@@ -1,12 +1,12 @@
-# GitHub Commit to Production: Full Release Workflow
+# GitHub Commit to Prod_Env_1: Full Release Workflow
 
-*Setup runbook — example-ado-source-control → Build → Integration → Production, with approval gates and failure notification*
+*Setup runbook — example-ado-source-control → Build → Release Source → UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1, with approval gates and failure notification*
 
 ## 1. Goal
 
-On every commit to the `example-ado-source-control` GitHub repository, automatically: build a DBmaestro package, gate on manual approval, upgrade the integration environment, gate on manual confirmation, gate on manual approval again, upgrade the production environment, and gate on a final manual confirmation. Values are parsed from the commit message rather than entered by hand.
+On every commit to the `example-ado-source-control` GitHub repository, automatically: build a DBmaestro package, then for each of Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 in turn — gate on manual approval, upgrade that environment, and gate on manual confirmation before moving on to the next one. Values are parsed from the commit message rather than entered by hand.
 
-There's a second, separate workflow for **ad-hoc** package builds: commits that only touch the `ad-hoc/` folder skip all of this — no TaskID convention, no approval gates, no environment upgrade — and instead just build whatever changed via git-diff detection, then go through the same approval-gated upgrade environments, except its Integration and Production legs run as two independent gates opened in parallel rather than one fixed sequence — see `ad-hoc-workflow.md` section 3.
+There's a second, separate workflow for **ad-hoc** package builds: commits that only touch the `ad-hoc/` folder skip all of this — no TaskID convention, no approval gates, no environment upgrade — and instead just build whatever changed via git-diff detection, then go through the same approval-gated upgrade environments, except its Release Source leg and its UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 leg run as two independent gates opened in parallel rather than one fixed sequence — see `ad-hoc-workflow.md` section 3.
 
 `example-ado-source-control` isn't a one-off — it's the pattern for the repo **every individual DBmaestro project** needs one of. Each DBmaestro project gets its own copy of this repo (same two wrapper files, its own parameter values), so a commit to that project's own repo drives that project's own release chain independently of any other project's. `example-ado-pipelines` (this repo) hosts one-time setup (this file) plus the shared pipeline logic reused by every one of those project repos. The chains themselves — stages, parameters, troubleshooting specific to each — are documented separately:
 
@@ -156,30 +156,34 @@ Repeat for **each** of pipeline 59 (Build and Precheck Package - Source Control)
 
 > Both permissions can instead be granted once at the project level (Project Settings → Pipelines → Settings/Security) to cover all pipelines rather than doing this three times.
 
-## 7. Create the four approval-gate environments
+## 7. Create the eight approval-gate environments
 
-Both workflows share the same four gates. For each, create an Azure DevOps Environment and attach a manual Approval check:
+Both workflows share the same eight gates. For each, create an Azure DevOps Environment and attach a manual Approval check:
 
 1. Go to Pipelines → Environments → New environment.
-2. Name it exactly as referenced in the YAML: `Integration-pre-approval`, `Integration-post-approval`, `Production-pre-approval`, or `Production-post-approval`.
+2. Name it exactly as referenced in the YAML: `Release-Source-pre-approval`, `Release-Source-post-approval`, `UAT_Env_1-pre-approval`, `UAT_Env_1-post-approval`, `Pre_Prod_Env_1-pre-approval`, `Pre_Prod_Env_1-post-approval`, `Prod_Env_1-pre-approval`, or `Prod_Env_1-post-approval`.
 3. Resource: choose **None** — these environments exist only to host an approval check, not to represent an actual deployment target.
 4. Create. Then open the environment → "⋮" → **Approvals and checks** → Add check → **Approvals**.
 5. Add the approver(s) for that gate and save.
 
-> **Renaming these environments** doesn't require touching either template: `integrationPreApprovalEnvironment`, `integrationPostApprovalEnvironment`, `productionPreApprovalEnvironment`, and `productionPostApprovalEnvironment` are template parameters (each defaulting to the names above) — just override them in the wrapper YAML's `extends: parameters:` block to whatever names you created your environments with.
+> **Renaming these environments** doesn't require touching either template: `releaseSourcePreApprovalEnvironment`, `releaseSourcePostApprovalEnvironment`, `uatEnv1PreApprovalEnvironment`, `uatEnv1PostApprovalEnvironment`, `preProdEnv1PreApprovalEnvironment`, `preProdEnv1PostApprovalEnvironment`, `prodEnv1PreApprovalEnvironment`, and `prodEnv1PostApprovalEnvironment` are template parameters (each defaulting to the names above) — just override them in the wrapper YAML's `extends: parameters:` block to whatever names you created your environments with.
 >
-> **Adding more gates** (e.g. a QA environment ahead of Integration) is different — the number and sequence of stages is hardcoded in `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml`, not driven by parameters. That requires actually editing the template: add a new stage modeled on the existing pre-approval/upgrade/post-approval trio, wire its `dependsOn` into the chain, and add a corresponding environment parameter for its name. Since the template is shared by every DBmaestro project's source-control repo, this change affects all of them at once.
+> **Adding more gates** (e.g. an additional environment ahead of Prod_Env_1) is different — the number and sequence of stages is hardcoded in `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml`, not driven by parameters. That requires actually editing the template: add a new stage modeled on the existing pre-approval/upgrade/post-approval trio, wire its `dependsOn` into the chain, and add a corresponding environment parameter for its name. Since the template is shared by every DBmaestro project's source-control repo, this change affects all of them at once.
 
 Suggested approver assignment once fully rolled out:
 
 | Environment | Approver |
 |---|---|
-| `Integration-pre-approval` | approver1@dbmaestro.com |
-| `Integration-post-approval` | approver1@dbmaestro.com |
-| `Production-pre-approval` | approver2@dbmaestro.com |
-| `Production-post-approval` | approver2@dbmaestro.com |
+| `Release-Source-pre-approval` | approver1@dbmaestro.com |
+| `Release-Source-post-approval` | approver1@dbmaestro.com |
+| `UAT_Env_1-pre-approval` | approver1@dbmaestro.com |
+| `UAT_Env_1-post-approval` | approver1@dbmaestro.com |
+| `Pre_Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
+| `Pre_Prod_Env_1-post-approval` | approver2@dbmaestro.com |
+| `Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
+| `Prod_Env_1-post-approval` | approver2@dbmaestro.com |
 
-For initial testing, all four environments were instead assigned the same single approver so the whole chain could be validated end to end before splitting responsibilities between two reviewers as shown above.
+For initial testing, all eight environments were instead assigned the same single approver so the whole chain could be validated end to end before splitting responsibilities between two reviewers as shown above.
 
 Since neither workflow verifies success automatically (section 4a), whoever approves each gate should confirm the previous run actually succeeded first — the "Queue" steps print the run's URL to check.
 
@@ -188,11 +192,11 @@ Since neither workflow verifies success automatically (section 4a), whoever appr
 The first time either orchestrator's run actually reaches each environment, Azure DevOps pauses with a banner like:
 
 ```
-This pipeline needs permission to access a resource before this run can continue to Integration - Post-Approval Gate
-This pipeline needs permission to access a resource before this run can continue to Production - Pre-Approval Gate
+This pipeline needs permission to access a resource before this run can continue to UAT_Env_1 - Post-Approval Gate
+This pipeline needs permission to access a resource before this run can continue to Pre_Prod_Env_1 - Pre-Approval Gate
 ```
 
-This is a **one-time authorization per (pipeline, environment) pair**, distinct from the Approval check configured above — it exists because a YAML pipeline isn't automatically allowed to use any environment resource it references, even ones with no approval check at all. Expect to see this once for each of the four environments the first time each orchestrator runs end to end — that's up to eight prompts total across both workflows the first time each is exercised, not four.
+This is a **one-time authorization per (pipeline, environment) pair**, distinct from the Approval check configured above — it exists because a YAML pipeline isn't automatically allowed to use any environment resource it references, even ones with no approval check at all. Expect to see this once for each of the eight environments the first time each orchestrator runs end to end — that's up to sixteen prompts total across both workflows the first time each is exercised, not eight.
 
 To resolve it:
 
@@ -220,7 +224,7 @@ Consider adding equivalent subscriptions filtered to `Upgrade Environment` (defi
 By default, Azure DevOps run names show a generic build number like `#20260727.2` alongside whatever the latest commit message happens to be on that pipeline's own source repo — not necessarily anything meaningful. Both target pipelines set a custom build number format so each run in the ADO UI immediately shows what it's building:
 
 - `build-source-control.yml`: `name: 'TaskID-${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `TaskID-TASK-42 (20260727.2)`
-- `upgrade-environment.yml`: `name: '${{ parameters.targetEnvironment }} - TaskID-${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `Integration - TaskID-TASK-42 (20260727.2)`
+- `upgrade-environment.yml`: `name: '${{ parameters.targetEnvironment }} - TaskID-${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `UAT_Env_1 - TaskID-TASK-42 (20260727.2)`
 
 Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject `"`, `/`, `:`, `<`, `>`, `\`, `|`, `?`, `@`, and `*`, and a colon in an earlier version of this format caused every run to fail with "contains invalid character(s)." This is purely cosmetic otherwise — it doesn't change any pipeline behavior, only how each run is labeled in the Runs list.
 
