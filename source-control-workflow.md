@@ -1,6 +1,6 @@
 # Source-Control Workflow
 
-*Deep dive on `source-control-workflow.yml` — the TaskID-driven Build → Integration → Production release chain. Split out from `README.md` so the workflow's architecture, stages, and troubleshooting live in one place; see `README.md` for prerequisites and one-time ADO setup (service connections, permissions, environments, notifications) shared across both this workflow and the ad-hoc workflow.*
+*Deep dive on `source-control-workflow.yml` — the TaskID-driven Build → Release Source → UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 release chain. Split out from `README.md` so the workflow's architecture, stages, and troubleshooting live in one place; see `README.md` for prerequisites and one-time ADO setup (service connections, permissions, environments, notifications) shared across both this workflow and the ad-hoc workflow.*
 
 ## 1. What triggers it, and what doesn't
 
@@ -20,12 +20,12 @@ Without that exclusion, an ad-hoc-only commit would also trigger this workflow a
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
-Azure DevOps requires a self-triggered pipeline's YAML to live in the same repo whose pushes trigger it — there's no way around that. But the actual release logic doesn't need to live there too, and since every individual DBmaestro project needs its own `example-ado-source-control`-pattern repo (a commit to one project's repo must only drive that project's own chain), it shouldn't: copy-pasting the full 7-stage pipeline into every project's source-control repo would mean re-fixing the same bug in N places every time.
+Azure DevOps requires a self-triggered pipeline's YAML to live in the same repo whose pushes trigger it — there's no way around that. But the actual release logic doesn't need to live there too, and since every individual DBmaestro project needs its own `example-ado-source-control`-pattern repo (a commit to one project's repo must only drive that project's own chain), it shouldn't: copy-pasting the full 13-stage pipeline into every project's source-control repo would mean re-fixing the same bug in N places every time.
 
 So the logic is split across two files:
 
 - **`example-ado-source-control/source-control-workflow.yml`** — the thin trigger file. Just `trigger`, a `resources.repositories` entry pointing back at this `example-ado-pipelines` repo, and an `extends:` block passing a handful of parameters. [View it](./example-ado-source-control/source-control-workflow.yml).
-- **`example-ado-pipelines/azure-devops/templates/source-control-workflow.yml`** — the real pipeline: all 7 stages, extracted once. [View it](./azure-devops/templates/source-control-workflow.yml).
+- **`example-ado-pipelines/azure-devops/templates/source-control-workflow.yml`** — the real pipeline: all 13 stages, extracted once. [View it](./azure-devops/templates/source-control-workflow.yml).
 
 Every additional DBmaestro project's source-control repo gets an equally thin copy of the wrapper file (same shape, its own parameter values) — not a copy of the whole chain. Any future fix to the chain itself happens once, in the template.
 
@@ -64,25 +64,31 @@ Example:  v1.0.1; TaskID: V1.0.1
 
 This format is generated automatically by the **DBmaestro Source Control** application — it isn't something you type by hand. The only thing required on your end is to specify the **TaskID** value in the tool at commit time; DBmaestro Source Control then builds the full commit message (version plus `TaskID:` segment) for you. If a commit is ever made outside that tool, or the TaskID field is left blank, the message won't match this format and the Build stage's extraction step fails with `Could not find 'TaskID: <value>' ...` (see Troubleshooting below).
 
-The value after `TaskID:` is extracted once, in the Build stage, and reused as `packageName` for the build and as `packageNames` for both the integration and production upgrades.
+The value after `TaskID:` is extracted once, in the Build stage, and reused as `packageName` for the build and as `packageNames` for the Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 upgrades.
 
 ## 4. Stage-by-stage walkthrough
 
-The template runs seven stages in sequence, each depending on the previous one:
+The template runs thirteen stages in sequence, each depending on the previous one: Build, followed by a pre-approval → Upgrade → post-approval trio for each of Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 in turn.
 
 1. **Build** — checks out `self` (`fetchDepth: 1`), extracts the TaskID from the triggering commit message, and queues the per-repo "Build and Precheck Package - Source Control" pipeline (fire-and-forget — see "Fire-and-forget design" in `README.md`).
-2. **Integration pre-approval gate** — Environment `Integration-pre-approval`. Pauses until an approver signs off.
-3. **Upgrade (Integration)** — queues the shared "Upgrade Environment" pipeline with `targetEnvironment=Integration` and `packageNames=<TaskID>` (fire-and-forget).
-4. **Integration post-approval gate** — Environment `Integration-post-approval`. Confirms the integration upgrade before moving on.
-5. **Production pre-approval gate** — Environment `Production-pre-approval`. Pauses until an approver signs off on going to production.
-6. **Upgrade (Production)** — queues "Upgrade Environment" again with `targetEnvironment=Production` (fire-and-forget).
-7. **Production post-approval gate** — Environment `Production-post-approval`. Final confirmation; workflow ends here.
+2. **Release Source pre-approval gate** — Environment `Release-Source-pre-approval`. Pauses until an approver signs off.
+3. **Upgrade (Release Source)** — queues the shared "Upgrade Environment" pipeline with `targetEnvironment=Release Source` and `packageNames=<TaskID>` (fire-and-forget).
+4. **Release Source post-approval gate** — Environment `Release-Source-post-approval`. Confirms the Release Source upgrade before moving on.
+5. **UAT_Env_1 pre-approval gate** — Environment `UAT_Env_1-pre-approval`. Pauses until an approver signs off on going to UAT_Env_1.
+6. **Upgrade (UAT_Env_1)** — queues "Upgrade Environment" again with `targetEnvironment=UAT_Env_1` (fire-and-forget).
+7. **UAT_Env_1 post-approval gate** — Environment `UAT_Env_1-post-approval`. Confirms the UAT_Env_1 upgrade before moving on.
+8. **Pre_Prod_Env_1 pre-approval gate** — Environment `Pre_Prod_Env_1-pre-approval`. Pauses until an approver signs off on going to Pre_Prod_Env_1.
+9. **Upgrade (Pre_Prod_Env_1)** — queues "Upgrade Environment" again with `targetEnvironment=Pre_Prod_Env_1` (fire-and-forget).
+10. **Pre_Prod_Env_1 post-approval gate** — Environment `Pre_Prod_Env_1-post-approval`. Confirms the Pre_Prod_Env_1 upgrade before moving on.
+11. **Prod_Env_1 pre-approval gate** — Environment `Prod_Env_1-pre-approval`. Pauses until an approver signs off on going to production.
+12. **Upgrade (Prod_Env_1)** — queues "Upgrade Environment" again with `targetEnvironment=Prod_Env_1` (fire-and-forget).
+13. **Prod_Env_1 post-approval gate** — Environment `Prod_Env_1-post-approval`. Final confirmation; workflow ends here.
 
 Each gate is a separate Azure DevOps Environment with a manual Approval check configured in the ADO UI, not in code — so who approves any single gate can change later without touching the template.
 
 ### Passing the TaskID across stages
 
-The `UpgradeIntegration` and `UpgradeProduction` stages each need the TaskID extracted back in `Build`, two stages earlier. That's done with a job-level runtime expression:
+The `UpgradeReleaseSource`, `UpgradeUatEnv1`, `UpgradePreProdEnv1`, and `UpgradeProdEnv1` stages each need the TaskID extracted back in `Build`, stages earlier. That's done with a job-level runtime expression:
 
 ```yaml
 variables:
@@ -108,19 +114,25 @@ The live wrapper that Azure DevOps actually runs lives in the `example-ado-sourc
 1. Using the DBmaestro Source Control application, commit to `example-ado-source-control` with a message such as: `v1.0.2; TaskID: TASK-42`.
 2. Confirm the orchestrator starts, the Build stage extracts `TASK-42`, and the build pipeline (59 in this deployment) is queued.
 3. Check that build pipeline's run and confirm it succeeded before proceeding.
-4. At the Integration pre-approval gate, approve the pending check in the ADO UI (Pipelines → the run → the pending environment approval).
-5. Confirm the Upgrade (Integration) stage queues the upgrade pipeline (60) with `targetEnvironment=Integration` and `packageNames=TASK-42`; check that run succeeded.
-6. Approve the Integration post-approval gate.
-7. Approve the Production pre-approval gate.
-8. Confirm the Upgrade (Production) stage queues the upgrade pipeline with `targetEnvironment=Production` and `packageNames=TASK-42`; check that run succeeded.
-9. Approve the Production post-approval gate and confirm the run completes successfully.
+4. At the Release Source pre-approval gate, approve the pending check in the ADO UI (Pipelines → the run → the pending environment approval).
+5. Confirm the Upgrade (Release Source) stage queues the upgrade pipeline (60) with `targetEnvironment=Release Source` and `packageNames=TASK-42`; check that run succeeded.
+6. Approve the Release Source post-approval gate.
+7. Approve the UAT_Env_1 pre-approval gate.
+8. Confirm the Upgrade (UAT_Env_1) stage queues the upgrade pipeline with `targetEnvironment=UAT_Env_1` and `packageNames=TASK-42`; check that run succeeded.
+9. Approve the UAT_Env_1 post-approval gate.
+10. Approve the Pre_Prod_Env_1 pre-approval gate.
+11. Confirm the Upgrade (Pre_Prod_Env_1) stage queues the upgrade pipeline with `targetEnvironment=Pre_Prod_Env_1` and `packageNames=TASK-42`; check that run succeeded.
+12. Approve the Pre_Prod_Env_1 post-approval gate.
+13. Approve the Prod_Env_1 pre-approval gate.
+14. Confirm the Upgrade (Prod_Env_1) stage queues the upgrade pipeline with `targetEnvironment=Prod_Env_1` and `packageNames=TASK-42`; check that run succeeded.
+15. Approve the Prod_Env_1 post-approval gate and confirm the run completes successfully.
 
 ## 7. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Build/Upgrade step fails with `Could not find 'TaskID: <value>' ...` | The commit message didn't match the required `<version>; TaskID: <value>` format — amend the commit message and re-push. Commits made outside the DBmaestro Source Control application are the usual cause (section 3). |
-| `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing the build/upgrade pipeline | Most likely `stageDependencies.Build.Build.outputs['extract.packageName']` didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract`; (2) the consuming stage (`UpgradeIntegration`/`UpgradeProduction`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 4. |
+| `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing the build/upgrade pipeline | Most likely `stageDependencies.Build.Build.outputs['extract.packageName']` didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract`; (2) the consuming stage (`UpgradeReleaseSource`/`UpgradeUatEnv1`/`UpgradePreProdEnv1`/`UpgradeProdEnv1`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 4. |
 | A commit touching `ad-hoc/` triggered both `ad-hoc-workflow.yml` **and** this workflow, and this one failed at TaskID extraction | This workflow's `paths: exclude: [ad-hoc/*]` (section 1) is missing, misconfigured, or the commit touched files both inside and outside `ad-hoc/` in the same push (path filters trigger on the whole push, not per-file). |
 | `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource in the thin wrapper doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/source-control-workflow.yml` actually declares — compare the two side by side (section 2). |
 | Pipeline fails immediately with a GitHub authorization error referencing the `adoPipelines` repository | The service connection named in the wrapper's `adoPipelines` resource isn't scoped to reach `example-ado-pipelines` — see the setup note in section 2. |
