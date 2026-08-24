@@ -211,7 +211,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
+      packageTag: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeReleaseSource
         pool: ${{ parameters.runnerPool }}
@@ -228,7 +228,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Release Source" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Release Source" tagName="$(packageTag)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -300,7 +300,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
+      packageTag: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeUatEnv1
         pool: ${{ parameters.runnerPool }}
@@ -317,7 +317,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="UAT_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="UAT_Env_1" tagName="$(packageTag)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -389,7 +389,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
+      packageTag: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradePreProdEnv1
         pool: ${{ parameters.runnerPool }}
@@ -406,7 +406,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Pre_Prod_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Pre_Prod_Env_1" tagName="$(packageTag)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -478,7 +478,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
+      packageTag: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeProdEnv1
         pool: ${{ parameters.runnerPool }}
@@ -495,7 +495,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Prod_Env_1" packageNames="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters targetEnvironment="Prod_Env_1" tagName="$(packageTag)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
