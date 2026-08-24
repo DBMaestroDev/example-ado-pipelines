@@ -61,13 +61,9 @@ parameters:
     displayName: 'Pipeline ID of this repo''s "Build with Git Change Detection" pipeline (built from build-git-changes.yml)'
     type: string
   - name: sourceRepoName
-    displayName: 'Source repo (org/name) that the downstream build-git-changes.yml pipeline should detect changes in and check out'
+    displayName: 'Source repo name (org is always DBMaestroDev) that the downstream build-git-changes.yml pipeline should detect changes in and check out'
     type: string
-    default: 'DBMaestroDev/example-ado-source-control'
-  - name: sourceRepoEndpoint
-    displayName: 'Service connection name for the source repo used by the downstream build-git-changes.yml pipeline'
-    type: string
-    default: 'DBMaestroDev'
+    default: 'example-ado-source-control'
   - name: sourceRepoRef
     displayName: 'Git ref of the source repo used by the downstream build-git-changes.yml pipeline'
     type: string
@@ -176,11 +172,36 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.adHocBuildPipelineId }}" `
-                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" sourceRepoName="${{ parameters.sourceRepoName }}" sourceRepoEndpoint="${{ parameters.sourceRepoEndpoint }}" sourceRepoRef="${{ parameters.sourceRepoRef }}" `
+                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" sourceRepoName="${{ parameters.sourceRepoName }}" sourceRepoRef="${{ parameters.sourceRepoRef }}" `
                 --query id -o tsv
               Write-Host "Queued ad-hoc build run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
               Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
+              # Kept here (commented out) so it's a one-line re-enable if this
+              # org ever gets a 2nd parallel job. Just uncomment and remove
+              # the Write-Host lines above (except the "Queued ad-hoc build run" one).
+              #
+              # do {
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
+              # Write-Host "Ad-hoc build run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Ad-hoc build failed (result=$result). See run $runId in pipeline ${{ parameters.adHocBuildPipelineId }}."
+              #   exit 1
+              # }
             displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -246,6 +267,27 @@ stages:
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
               Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
+              # do {
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Release Source upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
             displayName: 'Queue: Upgrade Environment - Release Source (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -319,6 +361,27 @@ stages:
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
               Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
+              # do {
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]UAT_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
             displayName: 'Queue: Upgrade Environment - UAT_Env_1 (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -384,6 +447,27 @@ stages:
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
               Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
+              # do {
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Pre_Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
             displayName: 'Queue: Upgrade Environment - Pre_Prod_Env_1 (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -449,6 +533,27 @@ stages:
               Write-Host "Queued upgrade run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
               Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
+
+              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
+              # do {
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
+              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
+              # } while ($state -ne "completed")
+              #
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
+              # Write-Host "Upgrade run result: $result"
+              # if ($result -ne "succeeded") {
+              #   Write-Host "##vso[task.logissue type=error]Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
+              #   exit 1
+              # }
             displayName: 'Queue: Upgrade Environment - Prod_Env_1 (fire-and-forget)'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)

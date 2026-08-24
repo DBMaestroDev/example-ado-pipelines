@@ -64,7 +64,9 @@ Example:  v1.0.1; TaskID: V1.0.1
 
 This format is generated automatically by the **DBmaestro Source Control** application — it isn't something you type by hand. The only thing required on your end is to specify the **TaskID** value in the tool at commit time; DBmaestro Source Control then builds the full commit message (version plus `TaskID:` segment) for you. If a commit is ever made outside that tool, or the TaskID field is left blank, the message won't match this format and the Build stage's extraction step fails with `Could not find 'TaskID: <value>' ...` (see Troubleshooting below).
 
-The value after `TaskID:` is extracted once, in the Build stage, and reused as `packageName` for the build and as `packageNames` for the Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 upgrades.
+The value after `TaskID:` is extracted once, in the Build stage, into a variable called `taskId`. From it the extraction step derives a second variable, `packageName`, as `<taskId>-<shortHash>` (a 4-character short hash of the triggering commit, via `git rev-parse --short=4 HEAD`) — e.g. TaskID `TASK-42` at commit `a1b2c3d` becomes package name `TASK-42-a1b2`. This keeps each commit's build package uniquely named even when the same TaskID is committed more than once.
+
+`packageName` is passed to the build pipeline as its `packageName` parameter (the actual package/artifact name); `taskId` is passed alongside it as both `tasksList` and `tags` (grouping/tagging the build by TaskID regardless of the per-commit hash suffix). The Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 upgrade stages all reuse `taskId` (not `packageName`) as their `packageNames` parameter — see "Passing the TaskID across stages" below.
 
 ## 4. Stage-by-stage walkthrough
 
@@ -92,12 +94,14 @@ The `UpgradeReleaseSource`, `UpgradeUatEnv1`, `UpgradePreProdEnv1`, and `Upgrade
 
 ```yaml
 variables:
-  packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+  packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
 ```
+
+Despite the job variable being named `packageName`, it's populated from the `taskId` output (the raw TaskID, without the commit-hash suffix) — the upgrade pipelines need the stable TaskID, not the per-commit `packageName` value used for the build artifact itself (see section 3).
 
 Two things have to line up for this to resolve:
 
-- The extraction step in `Build` must literally be named `extract` (the step's `name:` field) and set the variable with `isOutput=true`.
+- The extraction step in `Build` must literally be named `extract` (the step's `name:` field) and set both `taskId` and `packageName` with `isOutput=true`.
 - The consuming stage must explicitly list `Build` in its own `dependsOn` — not just its approval-gate stage. Azure DevOps' `stageDependencies` output-variable expressions only resolve for stages that are *explicitly* listed in `dependsOn`, even when `Build` is already an indirect ancestor through the gate stage. Execution order is unaffected either way, since `Build` already has to finish before the gate stage runs — this is purely about making the output visible to the expression.
 
 This exact `stageDependencies.<Stage>.<Job>.outputs['<Step>.<Var>']` syntax is only valid inside a **job's `variables:` block** (a runtime `$[ ]` expression). It is *not* the right syntax for a **stage's own `condition:`** field — see the ad-hoc workflow doc's Troubleshooting section for the syntax that context actually needs, and why the two look similar enough to mix up.
@@ -132,7 +136,7 @@ The live wrapper that Azure DevOps actually runs lives in the `example-ado-sourc
 | Symptom | Fix |
 |---|---|
 | Build/Upgrade step fails with `Could not find 'TaskID: <value>' ...` | The commit message didn't match the required `<version>; TaskID: <value>` format — amend the commit message and re-push. Commits made outside the DBmaestro Source Control application are the usual cause (section 3). |
-| `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing the build/upgrade pipeline | Most likely `stageDependencies.Build.Build.outputs['extract.packageName']` didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract`; (2) the consuming stage (`UpgradeReleaseSource`/`UpgradeUatEnv1`/`UpgradePreProdEnv1`/`UpgradeProdEnv1`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 4. |
+| `ERROR: The 'packageNames' parameter is not a valid String` (or `packageName`) when queuing the build/upgrade pipeline | Most likely `stageDependencies.Build.Build.outputs['extract.taskId']` (or `extract.packageName` for the build stage itself) didn't resolve. Confirm: (1) the Build stage's extraction step is literally named `extract` and sets both `taskId` and `packageName` with `isOutput=true`; (2) the consuming stage (`UpgradeReleaseSource`/`UpgradeUatEnv1`/`UpgradePreProdEnv1`/`UpgradeProdEnv1`) explicitly lists `Build` in its `dependsOn`, not just its approval-gate stage — see section 4. |
 | A commit touching `ad-hoc/` triggered both `ad-hoc-workflow.yml` **and** this workflow, and this one failed at TaskID extraction | This workflow's `paths: exclude: [ad-hoc/*]` (section 1) is missing, misconfigured, or the commit touched files both inside and outside `ad-hoc/` in the same push (path filters trigger on the whole push, not per-file). |
 | `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource in the thin wrapper doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/source-control-workflow.yml` actually declares — compare the two side by side (section 2). |
 | Pipeline fails immediately with a GitHub authorization error referencing the `adoPipelines` repository | The service connection named in the wrapper's `adoPipelines` resource isn't scoped to reach `example-ado-pipelines` — see the setup note in section 2. |

@@ -56,8 +56,7 @@ extends:
     adHocBuildPipelineId: '62'   # this repo's "Build with Git Change Detection" pipeline
     upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
-    sourceRepoName: 'DBMaestroDev/example-ado-source-control'
-    sourceRepoEndpoint: 'DBMaestroDev'
+    sourceRepoName: 'example-ado-source-control'
     sourceRepoRef: 'refs/heads/main'
 ```
 

@@ -128,9 +128,15 @@ stages:
                 exit 1
               }
 
+              $shortHash = git rev-parse --short=4 HEAD
+              $packageName = "$taskId-$shortHash"
+
               Write-Host "TaskID resolved: $taskId"
-              Write-Host "##vso[task.setvariable variable=packageName]$taskId"
-              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$taskId"
+              Write-Host "Package name resolved: $packageName"
+              Write-Host "##vso[task.setvariable variable=taskId]$taskId"
+              Write-Host "##vso[task.setvariable variable=taskId;isOutput=true]$taskId"
+              Write-Host "##vso[task.setvariable variable=packageName]$packageName"
+              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
             name: extract
             displayName: 'Extract parameters from commit message'
 
@@ -146,7 +152,7 @@ stages:
                 --organization "${{ parameters.targetADOOrganization }}" `
                 --project "${{ parameters.targetADOProject }}" `
                 --id "${{ parameters.buildPipelineId }}" `
-                --parameters packageName="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" buildType="Specific Tasks" tasksList="$(packageName)" runnerPool="${{ parameters.runnerPool }}" `
+                --parameters packageName="$(packageName)" projectName="${{ parameters.dBmaestroProjectName }}" buildType="Specific Tasks" tasksList="$(taskId)" tags="$(taskId)" runnerPool="${{ parameters.runnerPool }}" `
                 --query id -o tsv
               Write-Host "Queued build run: $runId"
               Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of file)."
@@ -158,11 +164,19 @@ stages:
               # the Write-Host lines above (except the "Queued build run" one).
               #
               # do {
-              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
               #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
               # } while ($state -ne "completed")
               #
-              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
               # Write-Host "Build run result: $result"
               # if ($result -ne "succeeded") {
               #   Write-Host "##vso[task.logissue type=error]Build failed (result=$result). See run $runId in pipeline ${{ parameters.buildPipelineId }}."
@@ -197,7 +211,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeReleaseSource
         pool: ${{ parameters.runnerPool }}
@@ -222,11 +236,19 @@ stages:
 
               # --- Polling disabled - see NOTE at top of file. ---
               # do {
-              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
               #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
               # } while ($state -ne "completed")
               #
-              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
               #   Write-Host "##vso[task.logissue type=error]Release Source upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
@@ -278,7 +300,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeUatEnv1
         pool: ${{ parameters.runnerPool }}
@@ -303,11 +325,19 @@ stages:
 
               # --- Polling disabled - see NOTE at top of file. ---
               # do {
-              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
               #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
               # } while ($state -ne "completed")
               #
-              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
               #   Write-Host "##vso[task.logissue type=error]UAT_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
@@ -359,7 +389,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradePreProdEnv1
         pool: ${{ parameters.runnerPool }}
@@ -384,11 +414,19 @@ stages:
 
               # --- Polling disabled - see NOTE at top of file. ---
               # do {
-              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
               #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
               # } while ($state -ne "completed")
               #
-              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
               #   Write-Host "##vso[task.logissue type=error]Pre_Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
@@ -440,7 +478,7 @@ stages:
       - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
     condition: succeeded()
     variables:
-      packageName: $[ stageDependencies.Build.Build.outputs['extract.packageName'] ]
+      packageName: $[ stageDependencies.Build.Build.outputs['extract.taskId'] ]
     jobs:
       - job: UpgradeProdEnv1
         pool: ${{ parameters.runnerPool }}
@@ -465,11 +503,19 @@ stages:
 
               # --- Polling disabled - see NOTE at top of file. ---
               # do {
-              #   $state = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query state -o tsv
+              #   $state = az pipelines runs show `
+              #     --organization "${{ parameters.targetADOOrganization }}" `
+              #     --project "${{ parameters.targetADOProject }}" `
+              #     --id "$runId" `
+              #     --query state -o tsv
               #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
               # } while ($state -ne "completed")
               #
-              # $result = az pipelines runs show --organization "${{ parameters.targetADOOrganization }}" --project "${{ parameters.targetADOProject }}" --id "$runId" --query result -o tsv
+              # $result = az pipelines runs show `
+              #   --organization "${{ parameters.targetADOOrganization }}" `
+              #   --project "${{ parameters.targetADOProject }}" `
+              #   --id "$runId" `
+              #   --query result -o tsv
               # Write-Host "Upgrade run result: $result"
               # if ($result -ne "succeeded") {
               #   Write-Host "##vso[task.logissue type=error]Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
