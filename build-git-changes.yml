@@ -55,8 +55,7 @@ resources:
       type: github
       name: DBMaestroDev/dbmaestro-cicd
       endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
-      ref: refs/heads/UseSSL_False
-      #ref: refs/tags/v1
+      ref: refs/tags/v1
     # Repository alias below MUST equal the actual repo name (the part after
     # the org/) - PrepareSources selects between these via
     # `checkout: ${{ parameters.sourceRepoName }}`, which resolves the alias
