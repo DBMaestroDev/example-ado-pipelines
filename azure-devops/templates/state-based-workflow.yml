@@ -118,7 +118,7 @@ stages:
 
               java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
                 -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
-                -SourceEnvName "Release Source" `
+                -SourceEnvName "Dev_Env_1" `
                 -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -TargetEnvName "Release Source" `
                 -SourceVersionType "Specific Commit" `
@@ -219,7 +219,7 @@ stages:
 
               java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
                 -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
-                -SourceEnvName "Release Source" `
+                -SourceEnvName "Dev_Env_1" `
                 -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -TargetEnvName "UAT_Env_1" `
                 -SourceVersionType "Specific Commit" `
@@ -320,7 +320,7 @@ stages:
 
               java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
                 -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
-                -SourceEnvName "Release Source" `
+                -SourceEnvName "Dev_Env_1" `
                 -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -TargetEnvName "Pre_Prod_Env_1" `
                 -SourceVersionType "Specific Commit" `
@@ -421,7 +421,7 @@ stages:
 
               java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
                 -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
-                -SourceEnvName "Release Source" `
+                -SourceEnvName "Dev_Env_1" `
                 -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -TargetEnvName "Prod_Env_1" `
                 -SourceVersionType "Specific Commit" `
