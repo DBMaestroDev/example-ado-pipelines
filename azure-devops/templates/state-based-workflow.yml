@@ -38,7 +38,7 @@
 # agents don't have bash on PATH by default.
 #
 # NOTE - upgrades run inline, not via a queued downstream pipeline: each
-# "Upgrade:" step below calls DBmaestroAgent.jar -Upgrade directly on the
+# "Upgrade:" step below calls DBmaestroAgent.jar -RunPackageAsAdHoc directly on the
 # runner and waits for it to finish, so its own exit code gates the stage.
 
 parameters:
@@ -188,12 +188,12 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+              java -jar "${{ parameters.agentJarPath }}" -RunPackageAsAdHoc `
                 -ProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -EnvName "Release Source" `
                 -PackageName "$(packageName)" `
-                -BackupBehavior True `
-                -RestoreBehavior True `
+                -ScriptType "Upgrade" `
+                -RunPackage True `
                 -Server "$(DBMAESTRO_SERVER)" `
                 -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
               if ($LASTEXITCODE -ne 0) {
@@ -289,12 +289,12 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+              java -jar "${{ parameters.agentJarPath }}" -RunPackageAsAdHoc `
                 -ProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -EnvName "UAT_Env_1" `
                 -PackageName "$(packageName)" `
-                -BackupBehavior True `
-                -RestoreBehavior True `
+                -ScriptType "Upgrade" `
+                -RunPackage True `
                 -Server "$(DBMAESTRO_SERVER)" `
                 -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
               if ($LASTEXITCODE -ne 0) {
@@ -390,12 +390,12 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+              java -jar "${{ parameters.agentJarPath }}" -RunPackageAsAdHoc `
                 -ProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -EnvName "Pre_Prod_Env_1" `
                 -PackageName "$(packageName)" `
-                -BackupBehavior True `
-                -RestoreBehavior True `
+                -ScriptType "Upgrade" `
+                -RunPackage True `
                 -Server "$(DBMAESTRO_SERVER)" `
                 -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
               if ($LASTEXITCODE -ne 0) {
@@ -491,12 +491,12 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+              java -jar "${{ parameters.agentJarPath }}" -RunPackageAsAdHoc `
                 -ProjectName "${{ parameters.dBmaestroProjectName }}" `
                 -EnvName "Prod_Env_1" `
                 -PackageName "$(packageName)" `
-                -BackupBehavior True `
-                -RestoreBehavior True `
+                -ScriptType "Upgrade" `
+                -RunPackage True `
                 -Server "$(DBMAESTRO_SERVER)" `
                 -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
               if ($LASTEXITCODE -ne 0) {
