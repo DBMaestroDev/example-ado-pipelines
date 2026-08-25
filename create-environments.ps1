@@ -15,7 +15,14 @@ $environments = @(
     "Pre_Prod_Env_1-pre-approval",
     "Pre_Prod_Env_1-post-approval",
     "Prod_Env_1-pre-approval",
-    "Prod_Env_1-post-approval"
+    "Prod_Env_1-post-approval",
+    # state-based-workflow.yml adds a Review Package gate per environment;
+    # its Pre-Upgrade gate reuses the existing "<Env>-pre-approval"
+    # environments above instead of provisioning new ones.
+    "Release-Source-review-package",
+    "UAT_Env_1-review-package",
+    "Pre_Prod_Env_1-review-package",
+    "Prod_Env_1-review-package"
 )
 
 $envUri = "https://dev.azure.com/$Org/$Project/_apis/pipelines/environments?api-version=7.1-preview.1"

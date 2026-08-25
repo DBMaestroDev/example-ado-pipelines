@@ -1,0 +1,43 @@
+# State-based release workflow: triggered by every push to this repo (except
+# ad-hoc/* changes, which ad-hoc-workflow.yml handles instead, and root-level
+# pipeline YAML changes).
+#
+# This file is intentionally thin, same reasoning as
+# example-ado-source-control/source-control-workflow.yml: Azure DevOps
+# requires a self-triggered pipeline's YAML to live in the same repo whose
+# pushes trigger it, so this file has to exist here even though all its real
+# logic lives in exactly one place:
+# azure-devops/templates/state-based-workflow.yml in the example-ado-pipelines
+# repo, `extends:`-ed below.
+#
+# See the template for the full Build -> Review Package -> Pre-Upgrade ->
+# Upgrade chain (repeated per environment), the state-based CustomBuild
+# semantics, the fire-and-forget/1-parallel-job rationale, and the
+# Windows/pwsh requirement.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - ad-hoc/*   # ad-hoc/ changes are handled by ad-hoc-workflow.yml instead
+      - /*.yml   # root-level pipeline definitions - changes to the pipeline
+                 # code itself shouldn't trigger a release run
+
+resources:
+  repositories:
+    - repository: adoPipelines
+      type: github
+      name: DBMaestroDev/example-ado-pipelines
+      endpoint: 'DBMaestroDev'  # must match the service connection name exactly - reuses the
+                                 # same GitHub connection used elsewhere in this org for
+                                 # example-ado-source-control; if that connection isn't scoped
+                                 # to this repo too, register a separate one and update this.
+      ref: refs/heads/main
+
+extends:
+  template: azure-devops/templates/state-based-workflow.yml@adoPipelines
+  parameters:
+    dBmaestroProjectName: 'Example-ADO'
+    runnerPool: 'dbmaestro-windows'

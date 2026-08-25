@@ -1,0 +1,502 @@
+# Reusable "state-based release" pipeline template.
+#
+# Why this exists / how it differs from source-control-workflow.yml:
+# source-control-workflow.yml builds ONE package from a specific commit and
+# reuses that same package across every environment upgrade. This template
+# instead builds via DBmaestro's *state-based* CustomBuild mode, which diffs a
+# specific source commit against a target environment's CURRENT LIVE STATE -
+# so the package that's valid for "promote into UAT_Env_1" is never the same
+# package that's valid for "promote into Pre_Prod_Env_1" (each target
+# environment's live state differs, and only reflects the previous stage once
+# that stage's upgrade has actually run). So instead of one Build stage feeding
+# N upgrades, this template runs N independent build-then-upgrade cycles - one
+# per environment - each building its own package immediately before its own
+# upgrade, via an inline `java -jar ... -CustomBuild` call (no queued build
+# pipeline involved, unlike the source-control workflow's pipeline 59).
+#
+# Chain: Init (resolve commit hash once) -> Release Source Build ->
+# Release Source Review Package approval -> Release Source Pre-Approval
+# gate -> Upgrade Release Source -> UAT_Env_1 Build -> ... (same 4-stage
+# shape repeated for UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1). Each approval is a
+# separate Azure DevOps Environment with a manual Approval check configured in
+# the ADO UI (Pipelines -> Environments) - swapping an approver never requires
+# touching this file. The Review Package gates are new environments specific
+# to this workflow; the pre-approval gates deliberately REUSE the same
+# "<Env>-pre-approval" environments already provisioned for
+# source-control-workflow.yml/ad-hoc-workflow.yml, rather than provisioning a
+# separate set - no new environments or approvers to set up for that gate.
+#
+# Package naming convention: "<TargetEnvName, spaces replaced with dashes>-<7
+# char short commit hash>", e.g. "Release-Source-50f5aac", "UAT_Env_1-50f5aac".
+# All packages built by one pipeline run share the same commit hash suffix,
+# so they're traceable back to the same trigger even though each is distinct.
+#
+# NOTE - Windows agents:
+# All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
+# agents don't have bash on PATH by default.
+#
+# NOTE - upgrades run inline, not via a queued downstream pipeline: each
+# "Upgrade:" step below calls DBmaestroAgent.jar -Upgrade directly on the
+# runner and waits for it to finish, so its own exit code gates the stage.
+
+parameters:
+  - name: dBmaestroProjectName
+    displayName: 'DBmaestro project name (used for both the inline CustomBuild and inline Upgrade calls)'
+    type: string
+  - name: runnerPool
+    displayName: 'Agent pool for this workflow''s jobs'
+    type: string
+    default: 'DBMaestro'
+  - name: agentJarPath
+    displayName: 'Path to DBmaestroAgent.jar on the runner, used by the inline CustomBuild calls'
+    type: string
+    default: 'C:\Program Files (x86)\DBmaestro\DOP Server\Agent\DBmaestroAgent.jar'
+  - name: releaseSourceReviewPackageEnvironment
+    type: string
+    default: 'Release-Source-review-package'
+  - name: releaseSourcePreApprovalEnvironment
+    displayName: 'Pre-upgrade approval gate environment - reuses the existing Release Source pre-approval environment'
+    type: string
+    default: 'Release-Source-pre-approval'
+  - name: uatEnv1ReviewPackageEnvironment
+    type: string
+    default: 'UAT_Env_1-review-package'
+  - name: uatEnv1PreApprovalEnvironment
+    displayName: 'Pre-upgrade approval gate environment - reuses the existing UAT_Env_1 pre-approval environment'
+    type: string
+    default: 'UAT_Env_1-pre-approval'
+  - name: preProdEnv1ReviewPackageEnvironment
+    type: string
+    default: 'Pre_Prod_Env_1-review-package'
+  - name: preProdEnv1PreApprovalEnvironment
+    displayName: 'Pre-upgrade approval gate environment - reuses the existing Pre_Prod_Env_1 pre-approval environment'
+    type: string
+    default: 'Pre_Prod_Env_1-pre-approval'
+  - name: prodEnv1ReviewPackageEnvironment
+    type: string
+    default: 'Prod_Env_1-review-package'
+  - name: prodEnv1PreApprovalEnvironment
+    displayName: 'Pre-upgrade approval gate environment - reuses the existing Prod_Env_1 pre-approval environment'
+    type: string
+    default: 'Prod_Env_1-pre-approval'
+
+stages:
+  # ------------------------------------------------------------------
+  - stage: Init
+    displayName: 'Resolve Commit Hash'
+    jobs:
+      - job: Init
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              $commitHash = git rev-parse --short=7 HEAD
+              Write-Host "Commit hash resolved: $commitHash"
+              Write-Host "##vso[task.setvariable variable=commitHash;isOutput=true]$commitHash"
+            name: resolve
+            displayName: 'Resolve short commit hash'
+
+  # ------------------------------------------------------------------
+  - stage: BuildReleaseSource
+    displayName: 'Release Source - Build Package'
+    dependsOn: Init
+    condition: succeeded()
+    variables:
+      commitHash: $[ stageDependencies.Init.Init.outputs['resolve.commitHash'] ]
+    jobs:
+      - job: BuildReleaseSource
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              $packageName = "Release-Source-$(commitHash)"
+              Write-Host "Package name resolved: $packageName"
+              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
+
+              java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
+                -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -SourceEnvName "Release Source" `
+                -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -TargetEnvName "Release Source" `
+                -SourceVersionType "Specific Commit" `
+                -TargetVersionType "Live Version" `
+                -CreatePackage True `
+                -PackageName "$packageName" `
+                -AdditionalInformation "$(commitHash)" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]CustomBuild failed for Release Source (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            name: build
+            displayName: 'CustomBuild: Commit -> Release Source'
+
+  # ------------------------------------------------------------------
+  - stage: ReleaseSourceReviewPackageApproval
+    displayName: 'Release Source - Review Package Gate'
+    dependsOn: BuildReleaseSource
+    condition: succeeded()
+    jobs:
+      - deployment: ReleaseSourceReviewPackageGate
+        displayName: 'Await Release Source package review'
+        environment: ${{ parameters.releaseSourceReviewPackageEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Release Source package reviewed and approved - proceeding to pre-approval gate."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: ReleaseSourcePreApproval
+    displayName: 'Release Source - Pre-Approval Gate'
+    dependsOn: ReleaseSourceReviewPackageApproval
+    condition: succeeded()
+    jobs:
+      - deployment: ReleaseSourcePreApprovalGate
+        displayName: 'Await Release Source pre-approval'
+        environment: ${{ parameters.releaseSourcePreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Release Source pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeReleaseSource
+    displayName: 'Upgrade - Release Source'
+    dependsOn:
+      - ReleaseSourcePreApproval
+      - BuildReleaseSource   # needed so stageDependencies.BuildReleaseSource... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.BuildReleaseSource.BuildReleaseSource.outputs['build.packageName'] ]
+    jobs:
+      - job: UpgradeReleaseSource
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Release Source" `
+                -PackageName "$(packageName)" `
+                -BackupBehavior True `
+                -RestoreBehavior True `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Release Source (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Release Source'
+
+  # ------------------------------------------------------------------
+  - stage: BuildUatEnv1
+    displayName: 'UAT_Env_1 - Build Package'
+    dependsOn:
+      - UpgradeReleaseSource
+      - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      commitHash: $[ stageDependencies.Init.Init.outputs['resolve.commitHash'] ]
+    jobs:
+      - job: BuildUatEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              $packageName = "UAT_Env_1-$(commitHash)"
+              Write-Host "Package name resolved: $packageName"
+              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
+
+              java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
+                -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -SourceEnvName "Release Source" `
+                -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -TargetEnvName "UAT_Env_1" `
+                -SourceVersionType "Specific Commit" `
+                -TargetVersionType "Live Version" `
+                -CreatePackage True `
+                -PackageName "$packageName" `
+                -AdditionalInformation "$(commitHash)" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]CustomBuild failed for UAT_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            name: build
+            displayName: 'CustomBuild: Commit -> UAT_Env_1'
+
+  # ------------------------------------------------------------------
+  - stage: UatEnv1ReviewPackageApproval
+    displayName: 'UAT_Env_1 - Review Package Gate'
+    dependsOn: BuildUatEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: UatEnv1ReviewPackageGate
+        displayName: 'Await UAT_Env_1 package review'
+        environment: ${{ parameters.uatEnv1ReviewPackageEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "UAT_Env_1 package reviewed and approved - proceeding to pre-approval gate."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UatEnv1PreApproval
+    displayName: 'UAT_Env_1 - Pre-Approval Gate'
+    dependsOn: UatEnv1ReviewPackageApproval
+    condition: succeeded()
+    jobs:
+      - deployment: UatEnv1PreApprovalGate
+        displayName: 'Await UAT_Env_1 pre-approval'
+        environment: ${{ parameters.uatEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "UAT_Env_1 pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeUatEnv1
+    displayName: 'Upgrade - UAT_Env_1'
+    dependsOn:
+      - UatEnv1PreApproval
+      - BuildUatEnv1   # needed so stageDependencies.BuildUatEnv1... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.BuildUatEnv1.BuildUatEnv1.outputs['build.packageName'] ]
+    jobs:
+      - job: UpgradeUatEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "UAT_Env_1" `
+                -PackageName "$(packageName)" `
+                -BackupBehavior True `
+                -RestoreBehavior True `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for UAT_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: UAT_Env_1'
+
+  # ------------------------------------------------------------------
+  - stage: BuildPreProdEnv1
+    displayName: 'Pre_Prod_Env_1 - Build Package'
+    dependsOn:
+      - UpgradeUatEnv1
+      - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      commitHash: $[ stageDependencies.Init.Init.outputs['resolve.commitHash'] ]
+    jobs:
+      - job: BuildPreProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              $packageName = "Pre_Prod_Env_1-$(commitHash)"
+              Write-Host "Package name resolved: $packageName"
+              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
+
+              java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
+                -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -SourceEnvName "Release Source" `
+                -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -TargetEnvName "Pre_Prod_Env_1" `
+                -SourceVersionType "Specific Commit" `
+                -TargetVersionType "Live Version" `
+                -CreatePackage True `
+                -PackageName "$packageName" `
+                -AdditionalInformation "$(commitHash)" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]CustomBuild failed for Pre_Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            name: build
+            displayName: 'CustomBuild: Commit -> Pre_Prod_Env_1'
+
+  # ------------------------------------------------------------------
+  - stage: PreProdEnv1ReviewPackageApproval
+    displayName: 'Pre_Prod_Env_1 - Review Package Gate'
+    dependsOn: BuildPreProdEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: PreProdEnv1ReviewPackageGate
+        displayName: 'Await Pre_Prod_Env_1 package review'
+        environment: ${{ parameters.preProdEnv1ReviewPackageEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Pre_Prod_Env_1 package reviewed and approved - proceeding to pre-approval gate."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: PreProdEnv1PreApproval
+    displayName: 'Pre_Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: PreProdEnv1ReviewPackageApproval
+    condition: succeeded()
+    jobs:
+      - deployment: PreProdEnv1PreApprovalGate
+        displayName: 'Await Pre_Prod_Env_1 pre-approval'
+        environment: ${{ parameters.preProdEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Pre_Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradePreProdEnv1
+    displayName: 'Upgrade - Pre_Prod_Env_1'
+    dependsOn:
+      - PreProdEnv1PreApproval
+      - BuildPreProdEnv1   # needed so stageDependencies.BuildPreProdEnv1... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.BuildPreProdEnv1.BuildPreProdEnv1.outputs['build.packageName'] ]
+    jobs:
+      - job: UpgradePreProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Pre_Prod_Env_1" `
+                -PackageName "$(packageName)" `
+                -BackupBehavior True `
+                -RestoreBehavior True `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Pre_Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Pre_Prod_Env_1'
+
+  # ------------------------------------------------------------------
+  - stage: BuildProdEnv1
+    displayName: 'Prod_Env_1 - Build Package'
+    dependsOn:
+      - UpgradePreProdEnv1
+      - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      commitHash: $[ stageDependencies.Init.Init.outputs['resolve.commitHash'] ]
+    jobs:
+      - job: BuildProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              $packageName = "Prod_Env_1-$(commitHash)"
+              Write-Host "Package name resolved: $packageName"
+              Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
+
+              java -jar "${{ parameters.agentJarPath }}" -CustomBuild `
+                -SourceProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -SourceEnvName "Release Source" `
+                -TargetProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -TargetEnvName "Prod_Env_1" `
+                -SourceVersionType "Specific Commit" `
+                -TargetVersionType "Live Version" `
+                -CreatePackage True `
+                -PackageName "$packageName" `
+                -AdditionalInformation "$(commitHash)" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]CustomBuild failed for Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            name: build
+            displayName: 'CustomBuild: Commit -> Prod_Env_1'
+
+  # ------------------------------------------------------------------
+  - stage: ProdEnv1ReviewPackageApproval
+    displayName: 'Prod_Env_1 - Review Package Gate'
+    dependsOn: BuildProdEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: ProdEnv1ReviewPackageGate
+        displayName: 'Await Prod_Env_1 package review'
+        environment: ${{ parameters.prodEnv1ReviewPackageEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Prod_Env_1 package reviewed and approved - proceeding to pre-approval gate."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: ProdEnv1PreApproval
+    displayName: 'Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: ProdEnv1ReviewPackageApproval
+    condition: succeeded()
+    jobs:
+      - deployment: ProdEnv1PreApprovalGate
+        displayName: 'Await Prod_Env_1 pre-approval'
+        environment: ${{ parameters.prodEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
+  - stage: UpgradeProdEnv1
+    displayName: 'Upgrade - Prod_Env_1 (Finalize)'
+    dependsOn:
+      - ProdEnv1PreApproval
+      - BuildProdEnv1   # needed so stageDependencies.BuildProdEnv1... resolves below - execution order is unaffected, it already runs first
+    condition: succeeded()
+    variables:
+      packageName: $[ stageDependencies.BuildProdEnv1.BuildProdEnv1.outputs['build.packageName'] ]
+    jobs:
+      - job: UpgradeProdEnv1
+        pool: ${{ parameters.runnerPool }}
+        steps:
+          - pwsh: |
+              $ErrorActionPreference = "Stop"
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Prod_Env_1" `
+                -PackageName "$(packageName)" `
+                -BackupBehavior True `
+                -RestoreBehavior True `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Prod_Env_1 (Finalize)'
