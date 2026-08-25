@@ -14,20 +14,22 @@
 # upgrade, via an inline `java -jar ... -CustomBuild` call (no queued build
 # pipeline involved, unlike the source-control workflow's pipeline 59).
 #
-# Chain: Init (resolve commit hash once) -> Release Source Build ->
-# Release Source Review Package approval -> Release Source Pre-Approval
-# gate -> Upgrade Release Source -> UAT_Env_1 Build -> ... (same 4-stage
-# shape repeated for UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1). Each approval is a
-# separate Azure DevOps Environment with a manual Approval check configured in
-# the ADO UI (Pipelines -> Environments) - swapping an approver never requires
-# touching this file. The Review Package gates are new environments specific
-# to this workflow; the pre-approval gates deliberately REUSE the same
+# Chain: Init (resolve commit hash once) -> Release Source Pre-Approval gate
+# (approve building/upgrading Release Source) -> Release Source Build ->
+# Release Source Review Package approval (approving the built package's
+# contents triggers the actual upgrade) -> Upgrade Release Source ->
+# UAT_Env_1 Pre-Approval gate -> ... (same 4-stage shape repeated for
+# UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1). Each approval is a separate Azure
+# DevOps Environment with a manual Approval check configured in the ADO UI
+# (Pipelines -> Environments) - swapping an approver never requires touching
+# this file. The Review Package gates are new environments specific to this
+# workflow; the pre-approval gates deliberately REUSE the same
 # "<Env>-pre-approval" environments already provisioned for
 # source-control-workflow.yml/ad-hoc-workflow.yml, rather than provisioning a
 # separate set - no new environments or approvers to set up for that gate.
 #
-# Package naming convention: "<TargetEnvName, spaces replaced with dashes>-<7
-# char short commit hash>", e.g. "Release-Source-50f5aac", "UAT_Env_1-50f5aac".
+# Package naming convention: "<7 char short commit hash>-<TargetEnvName,
+# spaces replaced with dashes>", e.g. "50f5aac-Release-Source", "50f5aac-UAT_Env_1".
 # All packages built by one pipeline run share the same commit hash suffix,
 # so they're traceable back to the same trigger even though each is distinct.
 #
@@ -100,9 +102,28 @@ stages:
             displayName: 'Resolve short commit hash'
 
   # ------------------------------------------------------------------
+  - stage: ReleaseSourcePreApproval
+    displayName: 'Release Source - Pre-Approval Gate'
+    dependsOn: Init
+    condition: succeeded()
+    jobs:
+      - deployment: ReleaseSourcePreApprovalGate
+        displayName: 'Await Release Source pre-approval'
+        environment: ${{ parameters.releaseSourcePreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Release Source pre-approval granted - proceeding to build package."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
   - stage: BuildReleaseSource
     displayName: 'Release Source - Build Package'
-    dependsOn: Init
+    dependsOn:
+      - ReleaseSourcePreApproval
+      - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
       commitHash: $[ stageDependencies.Init.Init.outputs['resolve.commitHash'] ]
@@ -112,7 +133,7 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              $packageName = "Release-Source-$(commitHash)"
+              $packageName = "$(commitHash)-Release-Source"
               Write-Host "Package name resolved: $packageName"
               Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
 
@@ -149,31 +170,14 @@ stages:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Release Source package reviewed and approved - proceeding to pre-approval gate."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: ReleaseSourcePreApproval
-    displayName: 'Release Source - Pre-Approval Gate'
-    dependsOn: ReleaseSourceReviewPackageApproval
-    condition: succeeded()
-    jobs:
-      - deployment: ReleaseSourcePreApprovalGate
-        displayName: 'Await Release Source pre-approval'
-        environment: ${{ parameters.releaseSourcePreApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Release Source pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "Release Source package reviewed and approved - triggering upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
   - stage: UpgradeReleaseSource
     displayName: 'Upgrade - Release Source'
     dependsOn:
-      - ReleaseSourcePreApproval
+      - ReleaseSourceReviewPackageApproval
       - BuildReleaseSource   # needed so stageDependencies.BuildReleaseSource... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -199,10 +203,27 @@ stages:
             displayName: 'Upgrade: Release Source'
 
   # ------------------------------------------------------------------
+  - stage: UatEnv1PreApproval
+    displayName: 'UAT_Env_1 - Pre-Approval Gate'
+    dependsOn: UpgradeReleaseSource
+    condition: succeeded()
+    jobs:
+      - deployment: UatEnv1PreApprovalGate
+        displayName: 'Await UAT_Env_1 pre-approval'
+        environment: ${{ parameters.uatEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "UAT_Env_1 pre-approval granted - proceeding to build package."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
   - stage: BuildUatEnv1
     displayName: 'UAT_Env_1 - Build Package'
     dependsOn:
-      - UpgradeReleaseSource
+      - UatEnv1PreApproval
       - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -213,7 +234,7 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              $packageName = "UAT_Env_1-$(commitHash)"
+              $packageName = "$(commitHash)-UAT_Env_1"
               Write-Host "Package name resolved: $packageName"
               Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
 
@@ -250,31 +271,14 @@ stages:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "UAT_Env_1 package reviewed and approved - proceeding to pre-approval gate."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: UatEnv1PreApproval
-    displayName: 'UAT_Env_1 - Pre-Approval Gate'
-    dependsOn: UatEnv1ReviewPackageApproval
-    condition: succeeded()
-    jobs:
-      - deployment: UatEnv1PreApprovalGate
-        displayName: 'Await UAT_Env_1 pre-approval'
-        environment: ${{ parameters.uatEnv1PreApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "UAT_Env_1 pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "UAT_Env_1 package reviewed and approved - triggering upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
   - stage: UpgradeUatEnv1
     displayName: 'Upgrade - UAT_Env_1'
     dependsOn:
-      - UatEnv1PreApproval
+      - UatEnv1ReviewPackageApproval
       - BuildUatEnv1   # needed so stageDependencies.BuildUatEnv1... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -300,10 +304,27 @@ stages:
             displayName: 'Upgrade: UAT_Env_1'
 
   # ------------------------------------------------------------------
+  - stage: PreProdEnv1PreApproval
+    displayName: 'Pre_Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: UpgradeUatEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: PreProdEnv1PreApprovalGate
+        displayName: 'Await Pre_Prod_Env_1 pre-approval'
+        environment: ${{ parameters.preProdEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Pre_Prod_Env_1 pre-approval granted - proceeding to build package."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
   - stage: BuildPreProdEnv1
     displayName: 'Pre_Prod_Env_1 - Build Package'
     dependsOn:
-      - UpgradeUatEnv1
+      - PreProdEnv1PreApproval
       - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -314,7 +335,7 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              $packageName = "Pre_Prod_Env_1-$(commitHash)"
+              $packageName = "$(commitHash)-Pre_Prod_Env_1"
               Write-Host "Package name resolved: $packageName"
               Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
 
@@ -351,31 +372,14 @@ stages:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Pre_Prod_Env_1 package reviewed and approved - proceeding to pre-approval gate."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: PreProdEnv1PreApproval
-    displayName: 'Pre_Prod_Env_1 - Pre-Approval Gate'
-    dependsOn: PreProdEnv1ReviewPackageApproval
-    condition: succeeded()
-    jobs:
-      - deployment: PreProdEnv1PreApprovalGate
-        displayName: 'Await Pre_Prod_Env_1 pre-approval'
-        environment: ${{ parameters.preProdEnv1PreApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Pre_Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "Pre_Prod_Env_1 package reviewed and approved - triggering upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
   - stage: UpgradePreProdEnv1
     displayName: 'Upgrade - Pre_Prod_Env_1'
     dependsOn:
-      - PreProdEnv1PreApproval
+      - PreProdEnv1ReviewPackageApproval
       - BuildPreProdEnv1   # needed so stageDependencies.BuildPreProdEnv1... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -401,10 +405,27 @@ stages:
             displayName: 'Upgrade: Pre_Prod_Env_1'
 
   # ------------------------------------------------------------------
+  - stage: ProdEnv1PreApproval
+    displayName: 'Prod_Env_1 - Pre-Approval Gate'
+    dependsOn: UpgradePreProdEnv1
+    condition: succeeded()
+    jobs:
+      - deployment: ProdEnv1PreApprovalGate
+        displayName: 'Await Prod_Env_1 pre-approval'
+        environment: ${{ parameters.prodEnv1PreApprovalEnvironment }}
+        pool: ${{ parameters.runnerPool }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - pwsh: Write-Host "Prod_Env_1 pre-approval granted - proceeding to build package."
+                  displayName: 'Gate passed'
+
+  # ------------------------------------------------------------------
   - stage: BuildProdEnv1
     displayName: 'Prod_Env_1 - Build Package'
     dependsOn:
-      - UpgradePreProdEnv1
+      - ProdEnv1PreApproval
       - Init   # needed so stageDependencies.Init... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
@@ -415,7 +436,7 @@ stages:
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              $packageName = "Prod_Env_1-$(commitHash)"
+              $packageName = "$(commitHash)-Prod_Env_1"
               Write-Host "Package name resolved: $packageName"
               Write-Host "##vso[task.setvariable variable=packageName;isOutput=true]$packageName"
 
@@ -452,31 +473,14 @@ stages:
           runOnce:
             deploy:
               steps:
-                - pwsh: Write-Host "Prod_Env_1 package reviewed and approved - proceeding to pre-approval gate."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
-  - stage: ProdEnv1PreApproval
-    displayName: 'Prod_Env_1 - Pre-Approval Gate'
-    dependsOn: ProdEnv1ReviewPackageApproval
-    condition: succeeded()
-    jobs:
-      - deployment: ProdEnv1PreApprovalGate
-        displayName: 'Await Prod_Env_1 pre-approval'
-        environment: ${{ parameters.prodEnv1PreApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Prod_Env_1 pre-approval granted - proceeding to upgrade."
+                - pwsh: Write-Host "Prod_Env_1 package reviewed and approved - triggering upgrade."
                   displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
   - stage: UpgradeProdEnv1
     displayName: 'Upgrade - Prod_Env_1 (Finalize)'
     dependsOn:
-      - ProdEnv1PreApproval
+      - ProdEnv1ReviewPackageApproval
       - BuildProdEnv1   # needed so stageDependencies.BuildProdEnv1... resolves below - execution order is unaffected, it already runs first
     condition: succeeded()
     variables:
