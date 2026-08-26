@@ -91,7 +91,7 @@ stages:
         pool: ${{ parameters.runnerPool }}
         steps:
           - checkout: self
-            fetchDepth: 1
+            fetchDepth: 0
 
           - pwsh: |
               $ErrorActionPreference = "Stop"
