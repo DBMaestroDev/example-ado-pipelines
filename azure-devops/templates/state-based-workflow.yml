@@ -89,6 +89,8 @@ stages:
     jobs:
       - job: Init
         pool: ${{ parameters.runnerPool }}
+        workspace:
+          clean: all
         steps:
           - checkout: self
             fetchDepth: 0
