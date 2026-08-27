@@ -1,48 +1,33 @@
 # Reusable "state-based release" pipeline template.
 # Version: 1.0.0
 #
-# Why this exists / how it differs from source-control-workflow.yml:
-# source-control-workflow.yml builds ONE package from a specific commit and
-# reuses that same package across every environment upgrade. This template
-# instead builds via DBmaestro's *state-based* CustomBuild mode, which diffs a
-# specific source commit against a target environment's CURRENT LIVE STATE -
-# so the package that's valid for "promote into UAT_Env_1" is never the same
-# package that's valid for "promote into Pre_Prod_Env_1" (each target
-# environment's live state differs, and only reflects the previous stage once
-# that stage's upgrade has actually run). So instead of one Build stage feeding
-# N upgrades, this template runs N independent build-then-upgrade cycles - one
-# per environment - each building its own package immediately before its own
-# upgrade, via an inline `java -jar ... -CustomBuild` call (no queued build
-# pipeline involved, unlike the source-control workflow's pipeline 59).
+# How this differs from source-control-workflow.yml: that template builds
+# ONE package and reuses it across every environment. This one builds via
+# DBmaestro's *state-based* CustomBuild mode, which diffs the source commit
+# against each target environment's CURRENT LIVE STATE, so every environment
+# needs its own package. Hence N independent build-then-upgrade cycles - one
+# per environment - each with an inline `java -jar ... -CustomBuild` call
+# (no queued build pipeline).
 #
-# Chain: Init (resolve commit hash once) -> Release Source Pre-Approval gate
-# (approve building/upgrading Release Source) -> Release Source Build ->
-# Upgrade Release Source -> UAT_Env_1 Pre-Approval gate -> ... (same
-# 3-stage shape repeated for Release Source, UAT_Env_1, Pre_Prod_Env_1;
-# Prod_Env_1 keeps a 4th stage - see below). Each approval is a separate
-# Azure DevOps Environment with a manual Approval check configured in the
-# ADO UI (Pipelines -> Environments) - swapping an approver never requires
-# touching this file. The pre-approval gates deliberately REUSE the same
+# Chain: Init (resolve commit hash once) -> Release Source Pre-Approval ->
+# Release Source Build -> Upgrade Release Source -> UAT_Env_1 Pre-Approval ->
+# ... (same 3-stage shape for Release Source, UAT_Env_1, Pre_Prod_Env_1;
+# Prod_Env_1 adds a 4th "Review Package" approval gate before its upgrade).
+# Each approval is an ADO Environment with a manual Approval check
+# (Pipelines -> Environments). Pre-approval gates reuse the same
 # "<Env>-pre-approval" environments already provisioned for
-# source-control-workflow.yml/ad-hoc-workflow.yml, rather than provisioning a
-# separate set - no new environments or approvers to set up for that gate.
-# Only Prod_Env_1 keeps a Review Package gate (an additional approval of the
-# built package's contents before the upgrade runs) - it was removed from
-# Release Source, UAT_Env_1, and Pre_Prod_Env_1 so those environments upgrade
-# immediately after their build completes.
+# source-control-workflow.yml/ad-hoc-workflow.yml.
 #
-# Package naming convention: "<7 char short commit hash>-<TargetEnvName,
-# spaces replaced with dashes>", e.g. "50f5aac-Release-Source", "50f5aac-UAT_Env_1".
-# All packages built by one pipeline run share the same commit hash suffix,
-# so they're traceable back to the same trigger even though each is distinct.
+# Package naming: "<7 char short commit hash>-<TargetEnvName>", e.g.
+# "50f5aac-Release-Source" - all packages from one run share the commit hash.
 #
 # NOTE - Windows agents:
 # All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
 # agents don't have bash on PATH by default.
 #
 # NOTE - upgrades run inline, not via a queued downstream pipeline: each
-# "Upgrade:" step below calls DBmaestroAgent.jar -RunPackageAsAdHoc directly on the
-# runner and waits for it to finish, so its own exit code gates the stage.
+# "Upgrade:" step calls DBmaestroAgent.jar -RunPackageAsAdHoc directly and
+# waits for it to finish, so its own exit code gates the stage.
 
 parameters:
   - name: dBmaestroProjectName

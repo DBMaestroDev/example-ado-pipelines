@@ -1,38 +1,25 @@
 # Reusable "source-control release" pipeline template.
 # Version: 1.0.0
 #
-# Why this exists: same reasoning as azure-devops/templates/ad-hoc-workflow.yml
-# in this repo - Azure DevOps requires a self-triggered pipeline's YAML to
-# live in the same repo whose pushes trigger it, so a thin trigger file still
-# has to exist in every source-control repo. But with multiple source-control
-# repos sharing this one ado-pipelines repo, the actual 13-stage release chain
-# below lives here exactly once via `extends:`, instead of being copy-pasted
-# (and re-fixed) into every source-control repo. See
-# azure-devops/templates/ad-hoc-workflow.yml's usage comment for the wrapper
-# file's exact shape - the wrapper for this template looks the same, just
-# pointing at this file and passing buildPipelineId instead of
-# adHocBuildPipelineId/packagesFolder.
+# Why this exists: same reasoning as ad-hoc-workflow.yml - the actual
+# 13-stage release chain lives here exactly once via `extends:`, and each
+# source-control repo keeps only a thin trigger/wrapper file pointing at it
+# (passing buildPipelineId instead of adHocBuildPipelineId/packagesFolder).
 #
 # Chain: Build (extract TaskID from commit + queue) -> Release Source
 # pre-approval -> Upgrade Release Source -> Release Source post-approval ->
 # UAT_Env_1 pre-approval -> Upgrade UAT_Env_1 -> UAT_Env_1 post-approval ->
 # Pre_Prod_Env_1 pre-approval -> Upgrade Pre_Prod_Env_1 -> Pre_Prod_Env_1
 # post-approval -> Prod_Env_1 pre-approval -> Upgrade Prod_Env_1 -> Prod_Env_1
-# post-approval. Each gate is a separate Azure DevOps Environment with a
-# manual Approval check configured in the ADO UI (Pipelines -> Environments).
-# Swapping the approver for any single gate never requires touching this
-# file.
+# post-approval. Each gate is an ADO Environment with a manual Approval
+# check (Pipelines -> Environments).
 #
 # NOTE - Windows agents:
-# All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
-# agents don't have bash on PATH by default. PowerShell 7+ is a hard requirement
-# here, not a fallback-able one: the dbmaestro-cicd templates these pipelines
-# call (build-from-source, precheck-package, create-package, detect-packages,
-# tag-package, get-cli-jar, upgrade-environment) hardcode `pwsh: true` on their
-# Windows-path steps, so `powershell:` (Windows PowerShell 5.1) is NOT a valid
-# substitute anywhere in this workflow - install PowerShell 7+ on the agent
-# (already done on the dbmaestro-windows pool) and restart the agent service
-# after installing if it's ever missing.
+# All steps use `pwsh:` (PowerShell 7+), a hard requirement: the
+# dbmaestro-cicd templates this workflow calls hardcode `pwsh: true`, so
+# `powershell:` (Windows PowerShell 5.1) is not a valid substitute anywhere
+# here. Install PowerShell 7+ on the agent and restart the agent service if
+# it's ever missing.
 #
 # NOTE - fire-and-forget by design, not an oversight:
 # This organization has exactly 1 self-hosted parallel job and 0 granted

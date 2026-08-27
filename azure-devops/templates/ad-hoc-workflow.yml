@@ -1,45 +1,22 @@
 # Reusable "ad-hoc release" pipeline template.
 # Version: 1.0.0
 #
-# Why this exists: an Azure DevOps pipeline that self-triggers must have its
-# trigger YAML physically committed in the same repo whose pushes trigger it
-# - ADO won't self-trigger off a file living somewhere else. This workflow is
-# now manual-trigger only (see the wrapper's `trigger: none`), but the same
-# "trigger file must live in the calling repo" requirement still applies to
-# where a pipeline definition is registered, so the split remains: each
-# source-control repo only needs a thin wrapper file (resources + an
-# `extends:` block with a handful of parameters, including the runtime
-# `packageName` input) - all real logic and any future fix lives in exactly
-# one place, in this one ado-pipelines repo.
+# Why this exists: ADO pipeline definitions must be registered from a file
+# in the calling repo, so each source-control repo keeps a thin wrapper
+# (resources + `extends:` with a `packageName` input) while all real logic
+# lives here in ado-pipelines.
 #
-# Shape: given a `packageName` for a package that's already been built
-# elsewhere, this workflow upgrades every environment with it via inline
-# `java -jar DBmaestroAgent.jar -Upgrade ...` calls (no queued downstream
-# pipeline, no git-diff package detection - there's no Build stage at all).
-# It fans out into FOUR fully independent legs - one per environment
-# (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1), each its own
-# pre-approval -> Upgrade <env> pair - gated purely by which approval(s) get
-# approved. There's no post-approval gate after the upgrade - the inline
-# `-Upgrade` step's own exit code is what gates anything downstream, so a
-# second manual confirmation of the same result would be redundant. All four
-# legs' pre-approval gates are open from
-# the start of the run (each stage sets `dependsOn: []` explicitly - see the
-# NOTE on UatEnv1PreApproval below for why that can't just be omitted);
-# there's no dependency between any of the four legs, so leg selection
-# happens purely through which gate(s) get approved - approving only one
-# environment's gate runs only that environment's trio, in any order or
-# combination, and approving all four runs all four concurrently. See
-# source-control-workflow.yml's NOTE comments for the fire-and-forget/
-# 1-parallel-job rationale that originally motivated a similar two-leg
-# structure in an earlier version of this file - it no longer applies to the
-# Upgrade stages here (they run inline, not queued), but the
-# independent-legs approval structure it left behind is kept deliberately,
-# per the same reasoning: unrelated environments' approvals shouldn't block
-# each other.
+# Shape: given a `packageName` already built elsewhere, upgrades every
+# environment via inline `java -jar DBmaestroAgent.jar -Upgrade ...` calls
+# (no Build stage, no queued downstream pipeline). Fans out into FOUR
+# independent legs - one per environment (Release Source, UAT_Env_1,
+# Pre_Prod_Env_1, Prod_Env_1) - each a pre-approval -> Upgrade <env> pair,
+# with all four pre-approval gates open from the start (`dependsOn: []`).
+# Approving one or more gates runs just those legs, in any combination.
 #
 # NOTE - Windows agents:
-# All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
-# agents don't have bash on PATH by default.
+# All steps use `pwsh:` (PowerShell 7+) rather than `bash:` - Windows agents
+# don't have bash on PATH by default.
 
 parameters:
   - name: packageName
