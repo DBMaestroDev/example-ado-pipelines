@@ -148,7 +148,7 @@ Repeat the same steps for `ad-hoc-workflow.yml` (same repository, same connectio
 Two separate identities need explicit permission to queue pipelines with custom parameters here — without either, runs fail with `TF215106` access-denied errors:
 
 - **The project's build service identity** (e.g. `Example Build Service (dbmsc)` — the exact name follows the pattern `<project> Build Service (<org>)`), which is what `source-control-workflow.yml` runs as when it queues pipelines 59 and 60 via `az pipelines run`.
-- **The DBmaestro DOP hook's own identity** (whatever account the PAT configured in `hooks/paradigm-hook_adhoc_test.ps1` belongs to), which needs the same rights, but on the `ad-hoc-workflow.yml` pipeline definition itself — that's what it queues via `az pipelines run --variables "BuildPipeline.packagename=..."` (see `ad-hoc-workflow.md` section 4).
+- **The DBmaestro DOP hook's own identity** (whatever account the PAT configured in `hooks/paradigm-hook_adhoc_test.ps1` belongs to), which needs the same rights, but on the `ad-hoc-workflow.yml` pipeline definition itself — that's what it queues via `az pipelines run --parameters "packageName=..."` (see `ad-hoc-workflow.md` section 4).
 
 Repeat for **each** of pipeline 59 (Build and Precheck Package - Source Control), pipeline 60 (Upgrade Environment), and the `ad-hoc-workflow.yml` pipeline definition — for 59/60, grant to the build service identity; for `ad-hoc-workflow.yml`, grant to the hook's identity instead:
 
@@ -226,10 +226,11 @@ Consider adding an equivalent subscription filtered to `Upgrade Environment` (de
 
 ## 9. Friendly run names for the build and upgrade pipelines (59 and 60 in this example)
 
-By default, Azure DevOps run names show a generic build number like `#20260727.2` alongside whatever the latest commit message happens to be on that pipeline's own source repo — not necessarily anything meaningful. Both target pipelines set a custom build number format so each run in the ADO UI immediately shows what it's building:
+By default, Azure DevOps run names show a generic build number like `#20260727.2` alongside whatever the latest commit message happens to be on that pipeline's own source repo — not necessarily anything meaningful. The target pipelines, and both orchestrator wrappers, set a custom build number format so each run in the ADO UI immediately shows what it's building:
 
 - `build-source-control.yml`: `name: 'TaskID-${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `TaskID-TASK-42 (20260727.2)`
 - `upgrade-environment.yml`: `name: '${{ parameters.targetEnvironment }} - TaskID-${{ parameters.packageNames }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `UAT_Env_1 - TaskID-TASK-42 (20260727.2)`
+- `example-ado-source-control/ad-hoc-workflow.yml`: `name: 'Ad-Hoc-${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'` → e.g. `Ad-Hoc-9cf7a43-Release-Source (20260827.2)` — this is the wrapper itself, not a downstream pipeline, since `ad-hoc-workflow.yml` doesn't queue one.
 
 Note the dash (`TaskID-`) rather than a colon: Azure DevOps build numbers reject `"`, `/`, `:`, `<`, `>`, `\`, `|`, `?`, `@`, and `*`, and a colon in an earlier version of this format caused every run to fail with "contains invalid character(s)." This is purely cosmetic otherwise — it doesn't change any pipeline behavior, only how each run is labeled in the Runs list.
 

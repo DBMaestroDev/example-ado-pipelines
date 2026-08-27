@@ -32,6 +32,7 @@ $param1=$args[0]
 # Configuration
 $PAT = " "
 $ADOOrganization = "paradigmoutcomes"
+$ADOProject = "Network and Operations"
 $adhocPipelineName = "[DEV02] Adva-Pro DB Ad Hoc"
 
 # Setup logging
@@ -87,22 +88,26 @@ Write-Log "Step: $DOP_Step"
 Write-Log $DOP_PackageName
 
 
-$loginOutput = Write-Output $PAT | az devops login --organization "https://dev.azure.com/$ADOOrganization" --only-show-errors 2>&1
-Write-Log "Azure DevOps Login Output: $loginOutput"
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Log "ERROR: Azure DevOps login failed with exit code $LASTEXITCODE"
-    exit 1
-}
- 
 if ($foundAdhoc) {
     Write-Log "Is adhoc Package"
-    $pipelineOutput = az pipelines run --name $adhocPipelineName --branch "main" --org "https://dev.azure.com/$ADOOrganization" --project "Network and Operations" --variables "BuildPipeline.packagename=$DOP_PackageName" 2>&1
+
+    $loginOutput = Write-Output $PAT | az devops login --organization "https://dev.azure.com/$ADOOrganization" --only-show-errors 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "ERROR: Azure DevOps login failed with exit code $LASTEXITCODE"
+        Write-Log "Azure DevOps Login Output: $loginOutput"
+        exit 1
+    }
+
+    $pipelineOutput = az pipelines run --name $adhocPipelineName --branch "main" --org "https://dev.azure.com/$ADOOrganization" --project $ADOProject --parameters "packageName=$DOP_PackageName" 2>&1
     Write-Log "Command output: $pipelineOutput"
     if ($LASTEXITCODE -ne 0) {
         Write-Log "ERROR: Pipeline execution failed with exit code $LASTEXITCODE"
         exit 1
     }
+}
+else {
+    Write-Log "Package type is not adhoc. Won't trigger ADO pipeline"
 }
 
 Write-Log "=== Script Completed ==="

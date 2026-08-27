@@ -137,10 +137,19 @@ stages:
   # ------------------------------------------------------------------
   - stage: UatEnv1PreApproval
     displayName: 'UAT_Env_1 - Pre-Approval Gate'
-    # No dependsOn - this is the entry point to the UAT_Env_1 ->
+    # dependsOn: [] - this is the entry point to the UAT_Env_1 ->
     # Pre_Prod_Env_1 -> Prod_Env_1 leg, open from the start of the run at the
     # same time as ReleaseSourcePreApproval (see the two-leg design note at
     # the top of this file). Runs sequentially internally once started.
+    #
+    # NOTE: an empty dependsOn is REQUIRED here, not optional. Azure DevOps
+    # stages without an explicit dependsOn default to depending on the
+    # immediately preceding stage IN THE YAML - not "no dependency" - so
+    # omitting this would silently chain this stage (and the whole UAT_Env_1
+    # leg) behind ReleaseSourcePostApproval, defeating the two-leg design
+    # (confirmed the hard way: the ADO UI showed every stage running strictly
+    # left-to-right instead of the two legs opening in parallel).
+    dependsOn: []
     jobs:
       - deployment: UatEnv1PreApprovalGate
         displayName: 'Await UAT_Env_1 pre-approval'

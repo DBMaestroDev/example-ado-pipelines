@@ -17,6 +17,12 @@
 
 trigger: none
 
+# Makes the run name in the ADO UI show the package being upgraded (e.g.
+# "Ad-Hoc-9cf7a43-Release-Source (20260827.2)") instead of the generic
+# default build number. NOTE: build numbers can't contain ':' (or
+# '"/<>\|?@*') - ADO rejects it, hence the dash rather than a colon.
+name: 'Ad-Hoc-${{ parameters.packageName }} ($(Date:yyyyMMdd)$(Rev:.r))'
+
 parameters:
   - name: packageName
     displayName: 'Name of the already-built package to upgrade across all environments'

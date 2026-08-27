@@ -10,14 +10,16 @@ Ad-hoc packages don't go through the TaskID/commit-message flow that `source-con
 
 1. DOP runs a **precheck task** against a package as part of its own build/promotion flow.
 2. On completion, DOP invokes the hook script, passing it a JSON document describing that package (project name, package name/version, policies, event, step, and — critically — the package's `TypeId`).
-3. The hook script reads `TypeId` off the package. **Only when `TypeId` identifies the package as Ad-hoc** does it queue this pipeline, via `az pipelines run ... --variables "BuildPipeline.packagename=<package name>"` — passing the package name straight through as the `packageName` parameter this workflow expects. Any other package type is left alone; this pipeline is never queued for it.
+3. The hook script reads `TypeId` off the package. **Only when `TypeId` identifies the package as Ad-hoc** does it queue this pipeline, via `az pipelines run ... --parameters "packageName=<package name>"` — passing the package name straight through as this workflow's `packageName` runtime parameter. Any other package type is left alone; the script logs `Package type is not adhoc. Won't trigger ADO pipeline` and this pipeline is never queued for it.
+
+   **`--parameters`, not `--variables`:** `packageName` is declared as a run-time `parameters:` entry on the wrapper (section 2), not a pipeline variable — `az pipelines run` treats the two as distinct concepts with distinct flags, and passing it via `--variables` (e.g. as some earlier, unrelated build variable like `BuildPipeline.packagename`) fails to queue the run at all, with an error like `Could not queue the build because there were validation errors or warnings.`
 
 Because the trigger is conditional on package type and happens outside ADO entirely, there's no YAML `trigger:`/`paths:` filter to look at for "when does this run" the way there is for `source-control-workflow.yml` — the answer lives in the hook script's `TypeId` check.
 
 The other differences from `source-control-workflow.yml` all follow from there being no TaskID and no build step here:
 
 - **No commit message convention, no build stage.** The package this workflow upgrades already exists by the time DOP's hook queues this pipeline — there is nothing for this workflow to build or detect.
-- **Package name comes from the hook's DOP payload, not a parameter you type by hand.** The `packageName` value the hook script extracts and forwards *is* this pipeline's `packageName` parameter — anywhere `source-control-workflow.yml` uses an extracted TaskID as `packageName`, this workflow uses what the hook passed in `BuildPipeline.packagename`.
+- **Package name comes from the hook's DOP payload, not a parameter you type by hand.** The `packageName` value the hook script extracts and forwards *is* this pipeline's `packageName` parameter — anywhere `source-control-workflow.yml` uses an extracted TaskID as `packageName`, this workflow uses what the hook passed via `--parameters packageName=...`.
 - **Approval gates are reused, not duplicated.** The same eight environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, etc. — one pre/post pair per environment across Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1) back both workflows' gates — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
 - **Upgrades run inline, not via a queued downstream pipeline.** Each `Upgrade*` stage calls `DBmaestroAgent.jar -Upgrade` directly on the runner and waits for it to finish, so its own exit code gates the stage — see `state-based-workflow.yml` for the same inline-command pattern used there.
 
@@ -53,7 +55,7 @@ extends:
     runnerPool: 'dbmaestro-windows'
 ```
 
-The root-level `parameters:` block is what makes `packageName` a run-time input: it shows up as an editable field in ADO's "Run pipeline" dialog, and — same value — is exactly what the DOP hook script supplies via `az pipelines run --variables "BuildPipeline.packagename=<value>"` when it queues this pipeline for you. `${{ parameters.packageName }}` in the `extends:` block forwards whatever value the run was queued with straight down into the template's own `packageName` parameter.
+The root-level `parameters:` block is what makes `packageName` a run-time input: it shows up as an editable field in ADO's "Run pipeline" dialog, and — same value — is exactly what the DOP hook script supplies via `az pipelines run --parameters "packageName=<value>"` when it queues this pipeline for you. `${{ parameters.packageName }}` in the `extends:` block forwards whatever value the run was queued with straight down into the template's own `packageName` parameter.
 
 **Setup note:** as with `source-control-workflow.yml`, `DBMaestroDev` above is just this guide's own example deployment — in your setup, both `example-ado-pipelines` and `example-ado-source-control` live in **your own** GitHub org. The `adoPipelines` resource can reuse the same GitHub service connection already required for `example-ado-source-control`, provided that connection is scoped to `example-ado-pipelines` too.
 
@@ -112,17 +114,16 @@ No decision has been made yet on which of these three to standardize on; for now
 `hooks/paradigm-hook_adhoc_test.ps1` (invoked by `hooks/paradigm-hook.bat`) is what DOP actually calls after a precheck task completes. It:
 
 1. Reads the JSON document DOP passes it (the path is `%~1`/`$args[0]`), pulling out the project name (`FlowDetails.name`), package name (`Versions[].Package.versionString`), and — the field this whole decision hinges on — `Versions[].Package.TypeId`.
-2. Sets a flag when it finds `TypeId -eq 2` — DOP's Ad-hoc package type.
-3. Logs into Azure DevOps (`az devops login`, using the `$PAT`/`$ADOOrganization` configuration values at the top of the script).
-4. **Only if the Ad-hoc flag was set** does it queue this pipeline:
+2. Sets a flag when it finds `TypeId -eq 2` — DOP's Ad-hoc package type. If that flag isn't set, it logs `Package type is not adhoc. Won't trigger ADO pipeline` and stops there — it never even logs into Azure DevOps for a non-Ad-hoc package.
+3. **Only if the Ad-hoc flag was set** does it log into Azure DevOps (`az devops login`, using the `$PAT`/`$ADOOrganization` configuration values at the top of the script) and then queue this pipeline:
    ```powershell
    az pipelines run --name $adhocPipelineName --branch "main" `
-     --org "https://dev.azure.com/$ADOOrganization" --project "Network and Operations" `
-     --variables "BuildPipeline.packagename=$DOP_PackageName"
+     --org "https://dev.azure.com/$ADOOrganization" --project $ADOProject `
+     --parameters "packageName=$DOP_PackageName"
    ```
    Any package whose `TypeId` isn't 2 is left alone — the hook script does nothing further for it (a separate, non-ad-hoc pipeline may still pick it up elsewhere, per your DOP configuration; that's outside this workflow's scope).
 
-The `BuildPipeline.packagename` variable is exactly this pipeline's `packageName` parameter — see section 2's `extends:` block. There is deliberately no detection or validation of the package inside `ad-hoc-workflow.yml` itself: by the time this pipeline is queued, DOP and the hook script have already decided both *that* an upgrade should happen and *which* package it's for.
+**`--parameters`, not `--variables`:** this workflow's `packageName` is a run-time template parameter (section 2's `extends:` block), not a pipeline variable — the two aren't interchangeable in `az pipelines run`. Passing it as a variable instead (e.g. under some other name like `BuildPipeline.packagename`) queues the run against a parameter the pipeline was never told to expect, and `az` rejects it with `ERROR: Could not queue the build because there were validation errors or warnings.` before the run even starts. There is deliberately no detection or validation of the package inside `ad-hoc-workflow.yml` itself beyond that: by the time this pipeline is queued, DOP and the hook script have already decided both *that* an upgrade should happen and *which* package it's for.
 
 ## 5. Test
 
@@ -141,7 +142,8 @@ The `BuildPipeline.packagename` variable is exactly this pipeline's `packageName
 |---|---|
 | This pipeline never queues even though a precheck task ran | Check the hook script's own log first (`hooks/logs/`) — confirm DOP actually invoked it and that the package's `TypeId` was 2. A non-Ad-hoc package is expected to be skipped; anything else, check `$PAT`/`$ADOOrganization` and the `az devops login` step at the top of the hook script. |
 | Hook script logs a successful `az pipelines run`, but nothing shows up in ADO | Confirm `$adhocPipelineName`, `--org`, and `--project` in the hook script match this pipeline's actual name/org/project in ADO exactly — a mismatch fails the `az pipelines run` call itself, which the script does check for (`$LASTEXITCODE`), but double-check the logged output for the specific error. |
-| The pipeline runs but upgrades the wrong package (or an empty one) | Check `BuildPipeline.packagename` in the hook script's `az pipelines run --variables` call against `Versions[].Package.versionString` in the DOP JSON payload it read — and confirm the wrapper's `extends: parameters: packageName: ${{ parameters.packageName }}` line (section 2) wasn't changed to something else. |
+| `ERROR: Could not queue the build because there were validation errors or warnings.` | The hook script passed `packageName` via `--variables` instead of `--parameters` (or under the wrong name) — `packageName` is a run-time template parameter, not a pipeline variable; see section 4's `--parameters`/`--variables` note. Confirm the hook script's `az pipelines run` call uses `--parameters "packageName=$DOP_PackageName"` exactly. |
+| The pipeline runs but upgrades the wrong package (or an empty one) | Check the `packageName=$DOP_PackageName` value in the hook script's `az pipelines run --parameters` call against `Versions[].Package.versionString` in the DOP JSON payload it read — and confirm the wrapper's `extends: parameters: packageName: ${{ parameters.packageName }}` line (section 2) wasn't changed to something else. |
 | `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/ad-hoc-workflow.yml` declares — compare the two side by side (section 2). |
 | `java : The term 'java' is not recognized...` | Java isn't installed on the agent, or isn't on the PATH the agent service sees — every inline `-Upgrade` step needs `java` to run `DBmaestroAgent.jar`. See `README.md` section 2. |
 
