@@ -1,4 +1,5 @@
 # Reusable "source-control release" pipeline template.
+# Version: 1.0.0
 #
 # Why this exists: same reasoning as azure-devops/templates/ad-hoc-workflow.yml
 # in this repo - Azure DevOps requires a self-triggered pipeline's YAML to

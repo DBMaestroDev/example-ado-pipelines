@@ -1,34 +1,29 @@
-# Ad-hoc package build: triggered by pushes to this repo that touch files
-# under the 'ad-hoc/' folder.
+# Ad-hoc package upgrade: manually triggered, given the name of an
+# already-built package to upgrade across every environment.
 #
 # This file is intentionally thin. Azure DevOps requires a self-triggered
-# pipeline's YAML to live in the same repo whose pushes trigger it, so this
-# file has to exist here even though all its real logic lives in exactly one
+# pipeline's YAML to live in the same repo whose pushes trigger it - though
+# this workflow is manual-trigger only now, the same "definition lives in the
+# calling repo" split is kept so all real logic still lives in exactly one
 # place: azure-devops/templates/ad-hoc-workflow.yml in the example-ado-pipelines
 # repo, `extends:`-ed below. That template is shared by every source-control
-# repo that needs this same ad-hoc release chain - if there's more than one
+# repo that needs this same ad-hoc upgrade chain - if there's more than one
 # source-control repo, each of the others gets an equally thin copy of this
 # file (same shape, its own parameter values below). Any bug fix or change to
 # the chain itself happens once, in that one template - not copy-pasted here.
 #
-# See that template for the full Build -> approvals -> upgrades chain and its
-# design notes (git-diff detection, fire-and-forget queuing, etc.)
+# See that template for the full approvals -> upgrades chain and its design
+# notes (two independent legs, inline `java -jar -Upgrade` calls, etc.)
 
-trigger:
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - ad-hoc/*
+trigger: none
+
+parameters:
+  - name: packageName
+    displayName: 'Name of the already-built package to upgrade across all environments'
+    type: string
 
 resources:
   repositories:
-    - repository: dbmaestro-cicd
-      type: github
-      name: DBMaestroDev/dbmaestro-cicd
-      endpoint: dbmaestro-cicd  # Replace with your GitHub service connection name if different
-      ref: refs/heads/UseSSL_False
     - repository: adoPipelines
       type: github
       name: DBMaestroDev/example-ado-pipelines
@@ -41,12 +36,6 @@ resources:
 extends:
   template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
   parameters:
-    packagesFolder: 'ad-hoc'
-    targetADOOrganization: 'https://dev.azure.com/dbmsc'
-    targetADOProject: 'Example'
+    packageName: ${{ parameters.packageName }}
     dBmaestroProjectName: 'Example-ADO'
-    adHocBuildPipelineId: '62'   # this repo's "Build with Git" pipeline
-    upgradePipelineId: '60'      # shared "Upgrade Environment" pipeline
     runnerPool: 'dbmaestro-windows'
-    sourceRepoName: 'example-ado-source-control'
-    sourceRepoRef: 'refs/heads/main'

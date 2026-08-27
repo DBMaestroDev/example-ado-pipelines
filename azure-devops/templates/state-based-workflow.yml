@@ -1,4 +1,5 @@
 # Reusable "state-based release" pipeline template.
+# Version: 1.0.0
 #
 # Why this exists / how it differs from source-control-workflow.yml:
 # source-control-workflow.yml builds ONE package from a specific commit and
@@ -16,17 +17,19 @@
 #
 # Chain: Init (resolve commit hash once) -> Release Source Pre-Approval gate
 # (approve building/upgrading Release Source) -> Release Source Build ->
-# Release Source Review Package approval (approving the built package's
-# contents triggers the actual upgrade) -> Upgrade Release Source ->
-# UAT_Env_1 Pre-Approval gate -> ... (same 4-stage shape repeated for
-# UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1). Each approval is a separate Azure
-# DevOps Environment with a manual Approval check configured in the ADO UI
-# (Pipelines -> Environments) - swapping an approver never requires touching
-# this file. The Review Package gates are new environments specific to this
-# workflow; the pre-approval gates deliberately REUSE the same
+# Upgrade Release Source -> UAT_Env_1 Pre-Approval gate -> ... (same
+# 3-stage shape repeated for Release Source, UAT_Env_1, Pre_Prod_Env_1;
+# Prod_Env_1 keeps a 4th stage - see below). Each approval is a separate
+# Azure DevOps Environment with a manual Approval check configured in the
+# ADO UI (Pipelines -> Environments) - swapping an approver never requires
+# touching this file. The pre-approval gates deliberately REUSE the same
 # "<Env>-pre-approval" environments already provisioned for
 # source-control-workflow.yml/ad-hoc-workflow.yml, rather than provisioning a
 # separate set - no new environments or approvers to set up for that gate.
+# Only Prod_Env_1 keeps a Review Package gate (an additional approval of the
+# built package's contents before the upgrade runs) - it was removed from
+# Release Source, UAT_Env_1, and Pre_Prod_Env_1 so those environments upgrade
+# immediately after their build completes.
 #
 # Package naming convention: "<7 char short commit hash>-<TargetEnvName,
 # spaces replaced with dashes>", e.g. "50f5aac-Release-Source", "50f5aac-UAT_Env_1".
@@ -53,23 +56,14 @@ parameters:
     displayName: 'Path to DBmaestroAgent.jar on the runner, used by the inline CustomBuild calls'
     type: string
     default: 'C:\Program Files (x86)\DBmaestro\DOP Server\Agent\DBmaestroAgent.jar'
-  - name: releaseSourceReviewPackageEnvironment
-    type: string
-    default: 'Release-Source-review-package'
   - name: releaseSourcePreApprovalEnvironment
     displayName: 'Pre-upgrade approval gate environment - reuses the existing Release Source pre-approval environment'
     type: string
     default: 'Release-Source-pre-approval'
-  - name: uatEnv1ReviewPackageEnvironment
-    type: string
-    default: 'UAT_Env_1-review-package'
   - name: uatEnv1PreApprovalEnvironment
     displayName: 'Pre-upgrade approval gate environment - reuses the existing UAT_Env_1 pre-approval environment'
     type: string
     default: 'UAT_Env_1-pre-approval'
-  - name: preProdEnv1ReviewPackageEnvironment
-    type: string
-    default: 'Pre_Prod_Env_1-review-package'
   - name: preProdEnv1PreApprovalEnvironment
     displayName: 'Pre-upgrade approval gate environment - reuses the existing Pre_Prod_Env_1 pre-approval environment'
     type: string
@@ -159,28 +153,9 @@ stages:
             displayName: 'CustomBuild: Commit -> Release Source'
 
   # ------------------------------------------------------------------
-  - stage: ReleaseSourceReviewPackageApproval
-    displayName: 'Release Source - Review Package Gate'
-    dependsOn: BuildReleaseSource
-    condition: succeeded()
-    jobs:
-      - deployment: ReleaseSourceReviewPackageGate
-        displayName: 'Await Release Source package review'
-        environment: ${{ parameters.releaseSourceReviewPackageEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Release Source package reviewed and approved - triggering upgrade."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
   - stage: UpgradeReleaseSource
     displayName: 'Upgrade - Release Source'
-    dependsOn:
-      - ReleaseSourceReviewPackageApproval
-      - BuildReleaseSource   # needed so stageDependencies.BuildReleaseSource... resolves below - execution order is unaffected, it already runs first
+    dependsOn: BuildReleaseSource
     condition: succeeded()
     variables:
       packageName: $[ stageDependencies.BuildReleaseSource.BuildReleaseSource.outputs['build.packageName'] ]
@@ -260,28 +235,9 @@ stages:
             displayName: 'CustomBuild: Commit -> UAT_Env_1'
 
   # ------------------------------------------------------------------
-  - stage: UatEnv1ReviewPackageApproval
-    displayName: 'UAT_Env_1 - Review Package Gate'
-    dependsOn: BuildUatEnv1
-    condition: succeeded()
-    jobs:
-      - deployment: UatEnv1ReviewPackageGate
-        displayName: 'Await UAT_Env_1 package review'
-        environment: ${{ parameters.uatEnv1ReviewPackageEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "UAT_Env_1 package reviewed and approved - triggering upgrade."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
   - stage: UpgradeUatEnv1
     displayName: 'Upgrade - UAT_Env_1'
-    dependsOn:
-      - UatEnv1ReviewPackageApproval
-      - BuildUatEnv1   # needed so stageDependencies.BuildUatEnv1... resolves below - execution order is unaffected, it already runs first
+    dependsOn: BuildUatEnv1
     condition: succeeded()
     variables:
       packageName: $[ stageDependencies.BuildUatEnv1.BuildUatEnv1.outputs['build.packageName'] ]
@@ -361,28 +317,9 @@ stages:
             displayName: 'CustomBuild: Commit -> Pre_Prod_Env_1'
 
   # ------------------------------------------------------------------
-  - stage: PreProdEnv1ReviewPackageApproval
-    displayName: 'Pre_Prod_Env_1 - Review Package Gate'
-    dependsOn: BuildPreProdEnv1
-    condition: succeeded()
-    jobs:
-      - deployment: PreProdEnv1ReviewPackageGate
-        displayName: 'Await Pre_Prod_Env_1 package review'
-        environment: ${{ parameters.preProdEnv1ReviewPackageEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Pre_Prod_Env_1 package reviewed and approved - triggering upgrade."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
   - stage: UpgradePreProdEnv1
     displayName: 'Upgrade - Pre_Prod_Env_1'
-    dependsOn:
-      - PreProdEnv1ReviewPackageApproval
-      - BuildPreProdEnv1   # needed so stageDependencies.BuildPreProdEnv1... resolves below - execution order is unaffected, it already runs first
+    dependsOn: BuildPreProdEnv1
     condition: succeeded()
     variables:
       packageName: $[ stageDependencies.BuildPreProdEnv1.BuildPreProdEnv1.outputs['build.packageName'] ]

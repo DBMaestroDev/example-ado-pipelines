@@ -1,78 +1,56 @@
 # Reusable "ad-hoc release" pipeline template.
+# Version: 1.0.0
 #
-# Why this exists: an Azure DevOps pipeline that self-triggers on pushes to a
-# repo (this one does, on changes under `ad-hoc/`) must have its trigger YAML
-# physically committed in that same repo - ADO won't self-trigger off a file
-# living somewhere else. With multiple source-control repos sharing this one
-# ado-pipelines repo, that would normally mean copy-pasting this entire
-# 13-stage release chain into every source-control repo and re-fixing bugs in
-# N places. Splitting it into an `extends` template here means each
-# source-control repo only needs a thin wrapper file (trigger + resources +
-# an `extends:` block with a handful of parameters) - all real logic and any
-# future fix lives in exactly one place, in this one ado-pipelines repo.
-# See azure-devops/templates/ad-hoc-workflow.yml usage comment for the
-# wrapper's exact shape.
+# Why this exists: an Azure DevOps pipeline that self-triggers must have its
+# trigger YAML physically committed in the same repo whose pushes trigger it
+# - ADO won't self-trigger off a file living somewhere else. This workflow is
+# now manual-trigger only (see the wrapper's `trigger: none`), but the same
+# "trigger file must live in the calling repo" requirement still applies to
+# where a pipeline definition is registered, so the split remains: each
+# source-control repo only needs a thin wrapper file (resources + an
+# `extends:` block with a handful of parameters, including the runtime
+# `packageName` input) - all real logic and any future fix lives in exactly
+# one place, in this one ado-pipelines repo.
 #
-# Shape: Build (git-diff detect + queue) fans out into two independent
-# legs - Release Source (pre-approval -> Upgrade Release Source ->
+# Shape: given a `packageName` for a package that's already been built
+# elsewhere, this workflow upgrades every environment with it via inline
+# `java -jar DBmaestroAgent.jar -Upgrade ...` calls (no queued downstream
+# pipeline, no git-diff package detection - there's no Build stage at all).
+# It fans out into two independent legs, gated purely by which approval(s)
+# get approved - Release Source (pre-approval -> Upgrade Release Source ->
 # post-approval) and a 3-environment chain covering UAT_Env_1 ->
 # Pre_Prod_Env_1 -> Prod_Env_1 (each its own pre-approval -> Upgrade <env> ->
 # post-approval, gated strictly one after another within that chain). Both
-# legs' first pre-approval gates open as soon as Build succeeds; there's no
-# dependency between the two legs, so leg selection happens purely through
+# legs' first pre-approval gates are open from the start of the run; there's
+# no dependency between the two legs, so leg selection happens purely through
 # which gate(s) get approved - approving only Release Source's gate runs
 # only that leg, approving only UAT_Env_1's gate runs only that chain (which
 # then proceeds through Pre_Prod_Env_1 and Prod_Env_1 as each is approved in
 # turn), in either order, or concurrently, and approving both starts both in
 # parallel. See source-control-workflow.yml's NOTE comments for the
-# fire-and-forget/1-parallel-job rationale, which applies identically here.
+# fire-and-forget/1-parallel-job rationale that originally motivated this
+# shape - it no longer applies to the Upgrade stages here (they run inline,
+# not queued), but the two-leg approval structure it left behind is kept
+# deliberately, per the same reasoning: unrelated environments' approvals
+# shouldn't block each other.
 #
-# Key difference from source-control-workflow.yml: there's no TaskID to
-# extract from a commit message. Instead, the Build stage below runs its own
-# git-diff based package detection (the same dbmaestro-cicd
-# detect-packages.yml template used internally by the per-repo "Build with
-# Git Change Detection" pipeline) to determine which package(s) changed, then
-# passes that result directly to that pipeline via its packageNames
-# parameter - see build-git-changes.yml's packageNames parameter comment.
-# This avoids detecting the same push twice (once here, once inside that
-# pipeline), which is the whole point of doing detection in this workflow at
-# all rather than leaving it entirely to the downstream pipeline.
-#
-# Self-checkout path is resolved dynamically at runtime from
-# $(Build.Repository.Name) rather than hardcoded, since this template is
-# reused across source-control repos with different names - see the first
-# step of the Build stage below.
+# NOTE - Windows agents:
+# All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
+# agents don't have bash on PATH by default.
 
 parameters:
-  - name: packagesFolder
-    displayName: 'Root folder that ad-hoc packages live under in this repo'
-    type: string
-    default: 'ad-hoc'
-  - name: targetADOOrganization
-    displayName: 'Azure DevOps organization URL that hosts the downstream pipelines'
-    type: string
-  - name: targetADOProject
-    displayName: 'Azure DevOps project that hosts the downstream pipelines'
+  - name: packageName
+    displayName: 'Name of the already-built package to upgrade into every environment'
     type: string
   - name: dBmaestroProjectName
-    displayName: 'DBmaestro project name required by the downstream build/upgrade pipelines'
+    displayName: 'DBmaestro project name (used by the inline Upgrade calls)'
     type: string
-  - name: adHocBuildPipelineId
-    displayName: 'Pipeline ID of this repo''s "Build with Git Change Detection" pipeline (built from build-git-changes.yml)'
+  - name: agentJarPath
+    displayName: 'Path to DBmaestroAgent.jar on the runner, used by the inline Upgrade calls'
     type: string
-  - name: sourceRepoName
-    displayName: 'Source repo name (org is always DBMaestroDev) that the downstream build-git-changes.yml pipeline should detect changes in and check out'
-    type: string
-    default: 'example-ado-source-control'
-  - name: sourceRepoRef
-    displayName: 'Git ref of the source repo used by the downstream build-git-changes.yml pipeline'
-    type: string
-    default: 'refs/heads/main'
-  - name: upgradePipelineId
-    displayName: 'Pipeline ID of the shared "Upgrade Environment" pipeline'
-    type: string
+    default: 'C:\Program Files (x86)\DBmaestro\DOP Server\Agent\DBmaestroAgent.jar'
   - name: runnerPool
-    displayName: 'Agent pool for both this workflow''s own jobs and the downstream pipelines it queues'
+    displayName: 'Agent pool for this workflow''s jobs'
     type: string
     default: 'dbmaestro-windows'
   - name: releaseSourcePreApprovalEnvironment
@@ -102,132 +80,8 @@ parameters:
 
 stages:
   # ------------------------------------------------------------------
-  - stage: Build
-    displayName: 'Detect and Build Ad-Hoc Package(s) from Git Changes'
-    jobs:
-      - job: Build
-        pool: ${{ parameters.runnerPool }}
-        steps:
-          # This job checks out two repos (self + dbmaestro-cicd), which
-          # switches self from the single-repo "root" checkout location into
-          # the multi-repo nested layout - every repo (including self) lands
-          # in $(Build.SourcesDirectory)/<repo-name>, confirmed empirically
-          # in build-git-changes.yml's DEBUG step. Since this template is
-          # reused across source-control repos with different names, that
-          # folder name is resolved at RUNTIME below from
-          # $(Build.Repository.Name) (basename only - that variable returns
-          # "Org/Repo" for GitHub, and the checkout folder is just "Repo")
-          # rather than hardcoded, and stashed in $(selfSourcesPath) for the
-          # rest of this job to use.
-          - checkout: self
-            persistCredentials: true   # needed so the 'git fetch --unshallow'
-                                        # step below can authenticate - checkout
-                                        # credentials aren't persisted to later
-                                        # steps by default
-
-          - checkout: dbmaestro-cicd
-            fetchDepth: 1
-
-          # Force full history so HEAD~1 resolves for the detectFromPush diff
-          # below. fetchDepth: 0 was observed unreliable for a similarly-typed
-          # checkout in build-git-changes.yml (still only 1 commit either way)
-          # - --unshallow errors harmlessly if history is already complete, so
-          # this is safe to always run regardless.
-          - pwsh: |
-              $selfFolder = ("$(Build.Repository.Name)" -split '/')[-1]
-              $selfPath = Join-Path "$(Build.SourcesDirectory)" $selfFolder
-              Write-Host "Resolved self checkout path: $selfPath"
-              Write-Host "##vso[task.setvariable variable=selfSourcesPath]$selfPath"
-
-              Set-Location $selfPath
-              git fetch --unshallow 2>&1 | Write-Host
-              $LASTEXITCODE = 0
-            displayName: 'Resolve self checkout path & ensure full git history'
-
-          # detectFromPush diffs HEAD~1 vs HEAD, i.e. exactly the commit that
-          # triggered this run - see source-control-workflow.yml's Build stage
-          # for why baseRef/origin-branch comparison doesn't work here.
-          - template: azure-devops/templates/detect-packages.yml@dbmaestro-cicd
-            parameters:
-              detectFromPush: true
-              useWindows: true
-              sourcesPath: '$(selfSourcesPath)'
-              packagesFolder: '${{ parameters.packagesFolder }}'
-
-          - pwsh: |
-              $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              # Only forward a real package list. detect-packages.ps1 sets
-              # packages_list to the literal string "None" when nothing was
-              # found - passing that straight through would make the
-              # downstream build pipeline try to build a package literally
-              # named "None". Pass empty instead, which its own packageNames
-              # handling already treats as "nothing to build" gracefully.
-              $hasPackages = "$(detectPackages.has_packages)"
-              $pkgNames = if ($hasPackages -eq "true") { "$(detectPackages.packages_list)" } else { "" }
-
-              $runId = az pipelines run `
-                --organization "${{ parameters.targetADOOrganization }}" `
-                --project "${{ parameters.targetADOProject }}" `
-                --id "${{ parameters.adHocBuildPipelineId }}" `
-                --parameters packageNames="$pkgNames" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" sourceRepoName="${{ parameters.sourceRepoName }}" sourceRepoRef="${{ parameters.sourceRepoRef }}" `
-                --query id -o tsv
-              Write-Host "Queued ad-hoc build run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
-              # Kept here (commented out) so it's a one-line re-enable if this
-              # org ever gets a 2nd parallel job. Just uncomment and remove
-              # the Write-Host lines above (except the "Queued ad-hoc build run" one).
-              #
-              # do {
-              #   $state = az pipelines runs show `
-              #     --organization "${{ parameters.targetADOOrganization }}" `
-              #     --project "${{ parameters.targetADOProject }}" `
-              #     --id "$runId" `
-              #     --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show `
-              #   --organization "${{ parameters.targetADOOrganization }}" `
-              #   --project "${{ parameters.targetADOProject }}" `
-              #   --id "$runId" `
-              #   --query result -o tsv
-              # Write-Host "Ad-hoc build run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Ad-hoc build failed (result=$result). See run $runId in pipeline ${{ parameters.adHocBuildPipelineId }}."
-              #   exit 1
-              # }
-            displayName: 'Queue: Build with Git Change Detection (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
-
-  # ------------------------------------------------------------------
   - stage: ReleaseSourcePreApproval
     displayName: 'Release Source - Pre-Approval Gate'
-    dependsOn: Build
-    # Skips the whole rest of the chain (no dangling approval request) when
-    # this push didn't actually touch a recognized package under
-    # packagesFolder - e.g. a change to some other file that still happens to
-    # be under the ad-hoc/ path filter but outside any package's own folder.
-    #
-    # NOTE: a STAGE's own `condition:` uses a different expression context
-    # than a JOB's `variables:` block (see UpgradeReleaseSource/UpgradeUatEnv1
-    # /UpgradePreProdEnv1/UpgradeProdEnv1 below). In a job's `variables:`,
-    # cross-stage output lookup is
-    # `stageDependencies.<Stage>.<Job>.outputs['<Step>.<Var>']`. In a STAGE
-    # condition it's `dependencies.<Stage>.outputs['<Job>.<Step>.<Var>']`
-    # instead - job name moves inside the outputs key, and the prefix is
-    # `dependencies`, not `stageDependencies`. Using the wrong one here
-    # doesn't error - it just silently resolves to Null, so
-    # eq(Null, 'true') is always False and this stage (and everything
-    # depending on it) gets skipped even when Build genuinely succeeded and
-    # found packages. Confirmed the hard way via a live run.
-    condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
     jobs:
       - deployment: ReleaseSourcePreApprovalGate
         displayName: 'Await Release Source pre-approval'
@@ -243,54 +97,25 @@ stages:
   # ------------------------------------------------------------------
   - stage: UpgradeReleaseSource
     displayName: 'Upgrade - Release Source'
-    dependsOn:
-      - ReleaseSourcePreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    dependsOn: ReleaseSourcePreApproval
     condition: succeeded()
-    variables:
-      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
     jobs:
       - job: UpgradeReleaseSource
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              $runId = az pipelines run `
-                --organization "${{ parameters.targetADOOrganization }}" `
-                --project "${{ parameters.targetADOProject }}" `
-                --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Release Source" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
-              # do {
-              #   $state = az pipelines runs show `
-              #     --organization "${{ parameters.targetADOOrganization }}" `
-              #     --project "${{ parameters.targetADOProject }}" `
-              #     --id "$runId" `
-              #     --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show `
-              #   --organization "${{ parameters.targetADOOrganization }}" `
-              #   --project "${{ parameters.targetADOProject }}" `
-              #   --id "$runId" `
-              #   --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Release Source upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - Release Source (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Release Source" `
+                -PackageName "${{ parameters.packageName }}" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Release Source (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Release Source'
 
   # ------------------------------------------------------------------
   - stage: ReleaseSourcePostApproval
@@ -312,16 +137,10 @@ stages:
   # ------------------------------------------------------------------
   - stage: UatEnv1PreApproval
     displayName: 'UAT_Env_1 - Pre-Approval Gate'
-    # dependsOn Build (not ReleaseSourcePostApproval) so this gate opens
-    # concurrently with ReleaseSourcePreApproval right after Build succeeds,
-    # instead of waiting on the Release Source leg to be approved and
-    # upgraded first. Needs its own has_packages check below since it no
-    # longer inherits that gating transitively through the Release Source
-    # leg. This is the entry point to the UAT_Env_1 -> Pre_Prod_Env_1 ->
-    # Prod_Env_1 chain, which - unlike Release Source - runs sequentially
-    # internally once started.
-    dependsOn: Build
-    condition: and(succeeded(), eq(dependencies.Build.outputs['Build.detectPackages.has_packages'], 'true'))
+    # No dependsOn - this is the entry point to the UAT_Env_1 ->
+    # Pre_Prod_Env_1 -> Prod_Env_1 leg, open from the start of the run at the
+    # same time as ReleaseSourcePreApproval (see the two-leg design note at
+    # the top of this file). Runs sequentially internally once started.
     jobs:
       - deployment: UatEnv1PreApprovalGate
         displayName: 'Await UAT_Env_1 pre-approval'
@@ -337,54 +156,25 @@ stages:
   # ------------------------------------------------------------------
   - stage: UpgradeUatEnv1
     displayName: 'Upgrade - UAT_Env_1'
-    dependsOn:
-      - UatEnv1PreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    dependsOn: UatEnv1PreApproval
     condition: succeeded()
-    variables:
-      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
     jobs:
       - job: UpgradeUatEnv1
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              $runId = az pipelines run `
-                --organization "${{ parameters.targetADOOrganization }}" `
-                --project "${{ parameters.targetADOProject }}" `
-                --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="UAT_Env_1" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
-              # do {
-              #   $state = az pipelines runs show `
-              #     --organization "${{ parameters.targetADOOrganization }}" `
-              #     --project "${{ parameters.targetADOProject }}" `
-              #     --id "$runId" `
-              #     --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show `
-              #   --organization "${{ parameters.targetADOOrganization }}" `
-              #   --project "${{ parameters.targetADOProject }}" `
-              #   --id "$runId" `
-              #   --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]UAT_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - UAT_Env_1 (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "UAT_Env_1" `
+                -PackageName "${{ parameters.packageName }}" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for UAT_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: UAT_Env_1'
 
   # ------------------------------------------------------------------
   - stage: UatEnv1PostApproval
@@ -423,54 +213,25 @@ stages:
   # ------------------------------------------------------------------
   - stage: UpgradePreProdEnv1
     displayName: 'Upgrade - Pre_Prod_Env_1'
-    dependsOn:
-      - PreProdEnv1PreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    dependsOn: PreProdEnv1PreApproval
     condition: succeeded()
-    variables:
-      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
     jobs:
       - job: UpgradePreProdEnv1
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              $runId = az pipelines run `
-                --organization "${{ parameters.targetADOOrganization }}" `
-                --project "${{ parameters.targetADOProject }}" `
-                --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Pre_Prod_Env_1" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
-              # do {
-              #   $state = az pipelines runs show `
-              #     --organization "${{ parameters.targetADOOrganization }}" `
-              #     --project "${{ parameters.targetADOProject }}" `
-              #     --id "$runId" `
-              #     --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show `
-              #   --organization "${{ parameters.targetADOOrganization }}" `
-              #   --project "${{ parameters.targetADOProject }}" `
-              #   --id "$runId" `
-              #   --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Pre_Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - Pre_Prod_Env_1 (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Pre_Prod_Env_1" `
+                -PackageName "${{ parameters.packageName }}" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Pre_Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Pre_Prod_Env_1'
 
   # ------------------------------------------------------------------
   - stage: PreProdEnv1PostApproval
@@ -509,54 +270,25 @@ stages:
   # ------------------------------------------------------------------
   - stage: UpgradeProdEnv1
     displayName: 'Upgrade - Prod_Env_1'
-    dependsOn:
-      - ProdEnv1PreApproval
-      - Build   # needed so stageDependencies.Build... resolves below - execution order is unaffected, Build already runs first
+    dependsOn: ProdEnv1PreApproval
     condition: succeeded()
-    variables:
-      packageNames: $[ stageDependencies.Build.Build.outputs['detectPackages.packages_list'] ]
     jobs:
       - job: UpgradeProdEnv1
         pool: ${{ parameters.runnerPool }}
         steps:
           - pwsh: |
               $ErrorActionPreference = "Stop"
-              az extension add --name azure-devops --only-show-errors
-              $env:AZURE_DEVOPS_EXT_PAT = $env:SYSTEM_ACCESSTOKEN
-
-              $runId = az pipelines run `
-                --organization "${{ parameters.targetADOOrganization }}" `
-                --project "${{ parameters.targetADOProject }}" `
-                --id "${{ parameters.upgradePipelineId }}" `
-                --parameters targetEnvironment="Prod_Env_1" packageNames="$(packageNames)" projectName="${{ parameters.dBmaestroProjectName }}" runnerPool="${{ parameters.runnerPool }}" `
-                --query id -o tsv
-              Write-Host "Queued upgrade run: $runId"
-              Write-Host "Fire-and-forget: not polling for completion (see NOTE at top of source-control-workflow.yml)."
-              Write-Host "Before approving the next gate, confirm this run succeeded: ${{ parameters.targetADOOrganization }}/${{ parameters.targetADOProject }}/_build/results?buildId=$runId"
-
-              # --- Polling disabled - see NOTE at top of source-control-workflow.yml. ---
-              # do {
-              #   $state = az pipelines runs show `
-              #     --organization "${{ parameters.targetADOOrganization }}" `
-              #     --project "${{ parameters.targetADOProject }}" `
-              #     --id "$runId" `
-              #     --query state -o tsv
-              #   if ($state -ne "completed") { Start-Sleep -Seconds 15 }
-              # } while ($state -ne "completed")
-              #
-              # $result = az pipelines runs show `
-              #   --organization "${{ parameters.targetADOOrganization }}" `
-              #   --project "${{ parameters.targetADOProject }}" `
-              #   --id "$runId" `
-              #   --query result -o tsv
-              # Write-Host "Upgrade run result: $result"
-              # if ($result -ne "succeeded") {
-              #   Write-Host "##vso[task.logissue type=error]Prod_Env_1 upgrade failed (result=$result). See run $runId in pipeline ${{ parameters.upgradePipelineId }}."
-              #   exit 1
-              # }
-            displayName: 'Queue: Upgrade Environment - Prod_Env_1 (fire-and-forget)'
-            env:
-              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              java -jar "${{ parameters.agentJarPath }}" -Upgrade `
+                -ProjectName "${{ parameters.dBmaestroProjectName }}" `
+                -EnvName "Prod_Env_1" `
+                -PackageName "${{ parameters.packageName }}" `
+                -Server "$(DBMAESTRO_SERVER)" `
+                -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=error]Upgrade failed for Prod_Env_1 (exit code $LASTEXITCODE)."
+                exit $LASTEXITCODE
+              }
+            displayName: 'Upgrade: Prod_Env_1'
 
   # ------------------------------------------------------------------
   - stage: ProdEnv1PostApproval

@@ -16,12 +16,10 @@ $environments = @(
     "Pre_Prod_Env_1-post-approval",
     "Prod_Env_1-pre-approval",
     "Prod_Env_1-post-approval",
-    # state-based-workflow.yml adds a Review Package gate per environment;
-    # its Pre-Upgrade gate reuses the existing "<Env>-pre-approval"
-    # environments above instead of provisioning new ones.
-    "Release-Source-review-package",
-    "UAT_Env_1-review-package",
-    "Pre_Prod_Env_1-review-package",
+    # state-based-workflow.yml adds a Review Package gate only for
+    # Prod_Env_1; its Pre-Upgrade gate reuses the existing
+    # "<Env>-pre-approval" environments above instead of provisioning new
+    # ones.
     "Prod_Env_1-review-package"
 )
 
