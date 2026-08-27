@@ -163,7 +163,7 @@ Repeat for **each** of pipeline 59 (Build and Precheck Package - Source Control)
 
 ## 7. Create the eight approval-gate environments
 
-Both workflows share the same eight gates. For each, create an Azure DevOps Environment and attach a manual Approval check:
+`source-control-workflow.yml` uses eight gates — a pre/post pair per environment across Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1. `ad-hoc-workflow.yml` only uses four — just the pre-approval gate for each of those same environments (it has no post-approval stage at all; see `ad-hoc-workflow.md` section 1) — reusing the same four `<Env>-pre-approval` environments rather than provisioning its own. Create all eight regardless, since `source-control-workflow.yml` needs the post-approval ones too:
 
 1. Go to Pipelines → Environments → New environment.
 2. Name it exactly as referenced in the YAML: `Release-Source-pre-approval`, `Release-Source-post-approval`, `UAT_Env_1-pre-approval`, `UAT_Env_1-post-approval`, `Pre_Prod_Env_1-pre-approval`, `Pre_Prod_Env_1-post-approval`, `Prod_Env_1-pre-approval`, or `Prod_Env_1-post-approval`.
@@ -171,26 +171,26 @@ Both workflows share the same eight gates. For each, create an Azure DevOps Envi
 4. Create. Then open the environment → "⋮" → **Approvals and checks** → Add check → **Approvals**.
 5. Add the approver(s) for that gate and save.
 
-> **Renaming these environments** doesn't require touching either template: `releaseSourcePreApprovalEnvironment`, `releaseSourcePostApprovalEnvironment`, `uatEnv1PreApprovalEnvironment`, `uatEnv1PostApprovalEnvironment`, `preProdEnv1PreApprovalEnvironment`, `preProdEnv1PostApprovalEnvironment`, `prodEnv1PreApprovalEnvironment`, and `prodEnv1PostApprovalEnvironment` are template parameters (each defaulting to the names above) — just override them in the wrapper YAML's `extends: parameters:` block to whatever names you created your environments with.
+> **Renaming these environments** doesn't require touching either template: `source-control-workflow.yml` has `releaseSourcePreApprovalEnvironment`, `releaseSourcePostApprovalEnvironment`, `uatEnv1PreApprovalEnvironment`, `uatEnv1PostApprovalEnvironment`, `preProdEnv1PreApprovalEnvironment`, `preProdEnv1PostApprovalEnvironment`, `prodEnv1PreApprovalEnvironment`, and `prodEnv1PostApprovalEnvironment`; `ad-hoc-workflow.yml` has just the four `*PreApprovalEnvironment` parameters. All are template parameters (each defaulting to the names above) — just override them in the wrapper YAML's `extends: parameters:` block to whatever names you created your environments with.
 >
-> **Adding more gates** (e.g. an additional environment ahead of Prod_Env_1) is different — the number and sequence of stages is hardcoded in `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml`, not driven by parameters. That requires actually editing the template: add a new stage modeled on the existing pre-approval/upgrade/post-approval trio, wire its `dependsOn` into the chain, and add a corresponding environment parameter for its name. Since the template is shared by every DBmaestro project's source-control repo, this change affects all of them at once.
+> **Adding more gates** (e.g. an additional environment ahead of Prod_Env_1) is different — the number and sequence of stages is hardcoded in `azure-devops/templates/source-control-workflow.yml`/`ad-hoc-workflow.yml`, not driven by parameters. That requires actually editing the template: add a new stage modeled on the existing pre-approval/upgrade (and, for `source-control-workflow.yml`, post-approval) pattern, wire its `dependsOn` into the chain, and add a corresponding environment parameter for its name. Since the template is shared by every DBmaestro project's source-control repo, this change affects all of them at once.
 
 Suggested approver assignment once fully rolled out:
 
 | Environment | Approver |
 |---|---|
 | `Release-Source-pre-approval` | approver1@dbmaestro.com |
-| `Release-Source-post-approval` | approver1@dbmaestro.com |
+| `Release-Source-post-approval` (source-control-workflow.yml only) | approver1@dbmaestro.com |
 | `UAT_Env_1-pre-approval` | approver1@dbmaestro.com |
-| `UAT_Env_1-post-approval` | approver1@dbmaestro.com |
+| `UAT_Env_1-post-approval` (source-control-workflow.yml only) | approver1@dbmaestro.com |
 | `Pre_Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
-| `Pre_Prod_Env_1-post-approval` | approver2@dbmaestro.com |
+| `Pre_Prod_Env_1-post-approval` (source-control-workflow.yml only) | approver2@dbmaestro.com |
 | `Prod_Env_1-pre-approval` | approver2@dbmaestro.com |
-| `Prod_Env_1-post-approval` | approver2@dbmaestro.com |
+| `Prod_Env_1-post-approval` (source-control-workflow.yml only) | approver2@dbmaestro.com |
 
 For initial testing, all eight environments were instead assigned the same single approver so the whole chain could be validated end to end before splitting responsibilities between two reviewers as shown above.
 
-Since neither workflow verifies success automatically (section 4a), whoever approves each gate should confirm the previous run actually succeeded first — the "Queue" steps print the run's URL to check.
+Since `source-control-workflow.yml` doesn't verify success automatically (section 4a), whoever approves each of its gates should confirm the previous run actually succeeded first — the "Queue" steps print the run's URL to check. `ad-hoc-workflow.yml`'s pre-approval gates don't have this concern — there's no prior queued run to check, since it's the first thing that happens in that leg.
 
 ### 7a. First-run resource authorization (separate from the approval check)
 
@@ -201,7 +201,7 @@ This pipeline needs permission to access a resource before this run can continue
 This pipeline needs permission to access a resource before this run can continue to Pre_Prod_Env_1 - Pre-Approval Gate
 ```
 
-This is a **one-time authorization per (pipeline, environment) pair**, distinct from the Approval check configured above — it exists because a YAML pipeline isn't automatically allowed to use any environment resource it references, even ones with no approval check at all. Expect to see this once for each of the eight environments the first time each orchestrator runs end to end — that's up to sixteen prompts total across both workflows the first time each is exercised, not eight.
+This is a **one-time authorization per (pipeline, environment) pair**, distinct from the Approval check configured above — it exists because a YAML pipeline isn't automatically allowed to use any environment resource it references, even ones with no approval check at all. Expect to see this once for each environment the first time each orchestrator runs end to end: up to eight prompts the first time `source-control-workflow.yml` runs (all eight gates), and up to four the first time `ad-hoc-workflow.yml` runs (just the four pre-approval gates it actually uses) — twelve total across both workflows, not sixteen.
 
 To resolve it:
 

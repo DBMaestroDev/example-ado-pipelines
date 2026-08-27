@@ -20,8 +20,9 @@ The other differences from `source-control-workflow.yml` all follow from there b
 
 - **No commit message convention, no build stage.** The package this workflow upgrades already exists by the time DOP's hook queues this pipeline — there is nothing for this workflow to build or detect.
 - **Package name comes from the hook's DOP payload, not a parameter you type by hand.** The `packageName` value the hook script extracts and forwards *is* this pipeline's `packageName` parameter — anywhere `source-control-workflow.yml` uses an extracted TaskID as `packageName`, this workflow uses what the hook passed via `--parameters packageName=...`.
-- **Approval gates are reused, not duplicated.** The same eight environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, etc. — one pre/post pair per environment across Release Source, UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1) back both workflows' gates — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
-- **Upgrades run inline, not via a queued downstream pipeline.** Each `Upgrade*` stage calls `DBmaestroAgent.jar -Upgrade` directly on the runner and waits for it to finish, so its own exit code gates the stage — see `state-based-workflow.yml` for the same inline-command pattern used there.
+- **Pre-approval gates are reused, not duplicated.** The same four `<Env>-pre-approval` environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, `Pre_Prod_Env_1-pre-approval`, `Prod_Env_1-pre-approval`) also back `source-control-workflow.yml`'s pre-approval gates for the same environments — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
+- **Upgrades run inline, not via a queued downstream pipeline.** Each `Upgrade*` stage calls `DBmaestroAgent.jar -Upgrade` directly on the runner and waits for it to finish, so its own exit code gates anything downstream — see `state-based-workflow.yml` for the same inline-command pattern used there.
+- **No post-approval gate.** Unlike `source-control-workflow.yml`, this workflow doesn't ask for a second manual confirmation after each upgrade — the inline `-Upgrade` step's own exit code already gates the run, so a human re-confirming the same pass/fail result would be redundant. Each leg is just pre-approval → Upgrade, full stop.
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
@@ -61,24 +62,20 @@ The root-level `parameters:` block is what makes `packageName` a run-time input:
 
 ## 3. Stage-by-stage walkthrough
 
-The chain splits into **four fully independent legs** — one per environment (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1) — all open from the start of the run, rather than any of them waiting on another. Each leg is its own pre-approval → Upgrade → post-approval trio:
+The chain splits into **four fully independent legs** — one per environment (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1) — all open from the start of the run, rather than any of them waiting on another. Each leg is just its own pre-approval → Upgrade pair — there's no post-approval gate (see section 1):
 
 - **Release Source leg:**
   1. **Release Source pre-approval gate** — Environment `Release-Source-pre-approval`.
   2. **Upgrade (Release Source)** — runs `java -jar DBmaestroAgent.jar -Upgrade -ProjectName "<dBmaestroProjectName>" -EnvName "Release Source" -PackageName "<packageName>" ...` inline on the runner.
-  3. **Release Source post-approval gate** — Environment `Release-Source-post-approval`.
 - **UAT_Env_1 leg:**
   1. **UAT_Env_1 pre-approval gate** — Environment `UAT_Env_1-pre-approval`.
   2. **Upgrade (UAT_Env_1)** — inline `-Upgrade -EnvName "UAT_Env_1"` call.
-  3. **UAT_Env_1 post-approval gate** — Environment `UAT_Env_1-post-approval`.
 - **Pre_Prod_Env_1 leg:**
   1. **Pre_Prod_Env_1 pre-approval gate** — Environment `Pre_Prod_Env_1-pre-approval`.
   2. **Upgrade (Pre_Prod_Env_1)** — inline `-Upgrade -EnvName "Pre_Prod_Env_1"` call.
-  3. **Pre_Prod_Env_1 post-approval gate** — Environment `Pre_Prod_Env_1-post-approval`.
 - **Prod_Env_1 leg:**
   1. **Prod_Env_1 pre-approval gate** — Environment `Prod_Env_1-pre-approval`.
   2. **Upgrade (Prod_Env_1)** — inline `-Upgrade -EnvName "Prod_Env_1"` call.
-  3. **Prod_Env_1 post-approval gate** — Environment `Prod_Env_1-post-approval`.
 
 All four legs' pre-approval gates are pending as soon as the run starts — there's nothing upstream of any of them to wait on, and no `dependsOn` between any two legs. Approving only one environment's gate runs only that environment's trio; approving several runs each of them concurrently, in any combination or order. Nothing enforces promoting through environments in a particular sequence — that ordering, if you want one, is a human process decision (approve Release Source, confirm it, *then* approve UAT_Env_1, and so on), not something the pipeline itself gates.
 
@@ -95,9 +92,9 @@ java -jar "<agentJarPath>" -Upgrade `
   -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
 ```
 
-with `-EnvName` set to `"Release Source"`, `"UAT_Env_1"`, `"Pre_Prod_Env_1"`, or `"Prod_Env_1"` for the respective stage. It runs on the runner directly and waits for it to finish, so a non-zero exit code fails that stage (and its own leg's post-approval gate) immediately — no separate pipeline is queued, and there's nothing to poll for.
+with `-EnvName` set to `"Release Source"`, `"UAT_Env_1"`, `"Pre_Prod_Env_1"`, or `"Prod_Env_1"` for the respective stage. It runs on the runner directly and waits for it to finish, so a non-zero exit code fails that stage immediately — no separate pipeline is queued, and there's nothing to poll for. Since that stage is also the last stage in its leg, a failed upgrade is the run's own signal that something went wrong — there's no separate post-approval gate to also reject.
 
-Each leg's own approval gates follow the exact same manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md` for the general Environment/Approval-check setup; it isn't repeated here.
+Each leg's own pre-approval gate follows the exact same manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md` for the general Environment/Approval-check setup; it isn't repeated here.
 
 ### 3a. Closing out a run that only deploys some environments
 
@@ -135,9 +132,9 @@ No decision has been made yet on which of these three to standardize on; for now
 2. Confirm the hook script's log (`hooks/logs/paradigm-hook_adhoc_test.log` by default — see section 4) shows `Is adhoc Package` and a successful `az pipelines run` call.
 3. Confirm `ad-hoc-workflow.yml` starts in ADO with the expected `packageName` (visible on the run's parameters).
 4. Confirm **all four** pre-approval gates (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1) are pending at the same time as soon as the run starts — this is the "four legs open in parallel" behavior, and the thing the `dependsOn: []` fix (section 3) exists to guarantee. If instead they appear one at a time, left-to-right, as each prior stage finishes, that's the missing-`dependsOn: []` regression — check every leg's pre-approval stage in the template.
-5. Approve only the Release Source pre-approval gate first, and confirm the other three legs stay pending/untouched (their Upgrade and post-approval stages haven't started) while the Release Source leg proceeds.
-6. Confirm the Upgrade (Release Source) stage's inline `java -jar ... -Upgrade` call succeeds, then approve Release Source post-approval.
-7. Approve each of the remaining three legs' pre-approval gates (together or one at a time, in any order) and confirm each one's Upgrade → post-approval pattern runs independently of the others.
+5. Approve only the Release Source pre-approval gate first, and confirm the other three legs stay pending/untouched (their Upgrade stages haven't started) while the Release Source leg proceeds.
+6. Confirm the Upgrade (Release Source) stage's inline `java -jar ... -Upgrade` call succeeds — that's the whole leg complete, no further gate to approve.
+7. Approve each of the remaining three legs' pre-approval gates (together or one at a time, in any order) and confirm each one's Upgrade stage runs and completes independently of the others.
 8. Separately, confirm a package with `TypeId` other than 2 does **not** cause the hook script to queue this pipeline at all.
 
 ## 6. Troubleshooting

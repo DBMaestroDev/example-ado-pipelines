@@ -18,8 +18,11 @@
 # pipeline, no git-diff package detection - there's no Build stage at all).
 # It fans out into FOUR fully independent legs - one per environment
 # (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1), each its own
-# pre-approval -> Upgrade <env> -> post-approval trio - gated purely by which
-# approval(s) get approved. All four legs' pre-approval gates are open from
+# pre-approval -> Upgrade <env> pair - gated purely by which approval(s) get
+# approved. There's no post-approval gate after the upgrade - the inline
+# `-Upgrade` step's own exit code is what gates anything downstream, so a
+# second manual confirmation of the same result would be redundant. All four
+# legs' pre-approval gates are open from
 # the start of the run (each stage sets `dependsOn: []` explicitly - see the
 # NOTE on UatEnv1PreApproval below for why that can't just be omitted);
 # there's no dependency between any of the four legs, so leg selection
@@ -56,27 +59,15 @@ parameters:
   - name: releaseSourcePreApprovalEnvironment
     type: string
     default: 'Release-Source-pre-approval'
-  - name: releaseSourcePostApprovalEnvironment
-    type: string
-    default: 'Release-Source-post-approval'
   - name: uatEnv1PreApprovalEnvironment
     type: string
     default: 'UAT_Env_1-pre-approval'
-  - name: uatEnv1PostApprovalEnvironment
-    type: string
-    default: 'UAT_Env_1-post-approval'
   - name: preProdEnv1PreApprovalEnvironment
     type: string
     default: 'Pre_Prod_Env_1-pre-approval'
-  - name: preProdEnv1PostApprovalEnvironment
-    type: string
-    default: 'Pre_Prod_Env_1-post-approval'
   - name: prodEnv1PreApprovalEnvironment
     type: string
     default: 'Prod_Env_1-pre-approval'
-  - name: prodEnv1PostApprovalEnvironment
-    type: string
-    default: 'Prod_Env_1-post-approval'
 
 stages:
   # ------------------------------------------------------------------
@@ -118,23 +109,6 @@ stages:
             displayName: 'Upgrade: Release Source'
 
   # ------------------------------------------------------------------
-  - stage: ReleaseSourcePostApproval
-    displayName: 'Release Source - Post-Approval Gate'
-    dependsOn: UpgradeReleaseSource
-    condition: succeeded()
-    jobs:
-      - deployment: ReleaseSourcePostApprovalGate
-        displayName: 'Confirm Release Source upgrade'
-        environment: ${{ parameters.releaseSourcePostApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Release Source upgrade confirmed."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
   - stage: UatEnv1PreApproval
     displayName: 'UAT_Env_1 - Pre-Approval Gate'
     # dependsOn: [] - this is its own independent leg, open from the start of
@@ -145,7 +119,7 @@ stages:
     # stages without an explicit dependsOn default to depending on the
     # immediately preceding stage IN THE YAML - not "no dependency" - so
     # omitting this would silently chain this stage behind
-    # ReleaseSourcePostApproval, defeating the independent-legs design
+    # UpgradeReleaseSource, defeating the independent-legs design
     # (confirmed the hard way: the ADO UI showed every stage running strictly
     # left-to-right instead of each leg opening in parallel). The same
     # dependsOn: [] is repeated on PreProdEnv1PreApproval and
@@ -185,23 +159,6 @@ stages:
                 exit $LASTEXITCODE
               }
             displayName: 'Upgrade: UAT_Env_1'
-
-  # ------------------------------------------------------------------
-  - stage: UatEnv1PostApproval
-    displayName: 'UAT_Env_1 - Post-Approval Gate'
-    dependsOn: UpgradeUatEnv1
-    condition: succeeded()
-    jobs:
-      - deployment: UatEnv1PostApprovalGate
-        displayName: 'Confirm UAT_Env_1 upgrade'
-        environment: ${{ parameters.uatEnv1PostApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "UAT_Env_1 upgrade confirmed."
-                  displayName: 'Gate passed'
 
   # ------------------------------------------------------------------
   - stage: PreProdEnv1PreApproval
@@ -246,23 +203,6 @@ stages:
             displayName: 'Upgrade: Pre_Prod_Env_1'
 
   # ------------------------------------------------------------------
-  - stage: PreProdEnv1PostApproval
-    displayName: 'Pre_Prod_Env_1 - Post-Approval Gate'
-    dependsOn: UpgradePreProdEnv1
-    condition: succeeded()
-    jobs:
-      - deployment: PreProdEnv1PostApprovalGate
-        displayName: 'Confirm Pre_Prod_Env_1 upgrade'
-        environment: ${{ parameters.preProdEnv1PostApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Pre_Prod_Env_1 upgrade confirmed."
-                  displayName: 'Gate passed'
-
-  # ------------------------------------------------------------------
   - stage: ProdEnv1PreApproval
     displayName: 'Prod_Env_1 - Pre-Approval Gate'
     # dependsOn: [] - independent leg, open from the start of the run same as
@@ -303,20 +243,3 @@ stages:
                 exit $LASTEXITCODE
               }
             displayName: 'Upgrade: Prod_Env_1'
-
-  # ------------------------------------------------------------------
-  - stage: ProdEnv1PostApproval
-    displayName: 'Prod_Env_1 - Post-Approval Gate (Finalize)'
-    dependsOn: UpgradeProdEnv1
-    condition: succeeded()
-    jobs:
-      - deployment: ProdEnv1PostApprovalGate
-        displayName: 'Finalize workflow'
-        environment: ${{ parameters.prodEnv1PostApprovalEnvironment }}
-        pool: ${{ parameters.runnerPool }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - pwsh: Write-Host "Prod_Env_1 upgrade confirmed. Workflow complete."
-                  displayName: 'Gate passed'
