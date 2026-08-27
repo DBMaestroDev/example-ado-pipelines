@@ -16,23 +16,23 @@
 # elsewhere, this workflow upgrades every environment with it via inline
 # `java -jar DBmaestroAgent.jar -Upgrade ...` calls (no queued downstream
 # pipeline, no git-diff package detection - there's no Build stage at all).
-# It fans out into two independent legs, gated purely by which approval(s)
-# get approved - Release Source (pre-approval -> Upgrade Release Source ->
-# post-approval) and a 3-environment chain covering UAT_Env_1 ->
-# Pre_Prod_Env_1 -> Prod_Env_1 (each its own pre-approval -> Upgrade <env> ->
-# post-approval, gated strictly one after another within that chain). Both
-# legs' first pre-approval gates are open from the start of the run; there's
-# no dependency between the two legs, so leg selection happens purely through
-# which gate(s) get approved - approving only Release Source's gate runs
-# only that leg, approving only UAT_Env_1's gate runs only that chain (which
-# then proceeds through Pre_Prod_Env_1 and Prod_Env_1 as each is approved in
-# turn), in either order, or concurrently, and approving both starts both in
-# parallel. See source-control-workflow.yml's NOTE comments for the
-# fire-and-forget/1-parallel-job rationale that originally motivated this
-# shape - it no longer applies to the Upgrade stages here (they run inline,
-# not queued), but the two-leg approval structure it left behind is kept
-# deliberately, per the same reasoning: unrelated environments' approvals
-# shouldn't block each other.
+# It fans out into FOUR fully independent legs - one per environment
+# (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1), each its own
+# pre-approval -> Upgrade <env> -> post-approval trio - gated purely by which
+# approval(s) get approved. All four legs' pre-approval gates are open from
+# the start of the run (each stage sets `dependsOn: []` explicitly - see the
+# NOTE on UatEnv1PreApproval below for why that can't just be omitted);
+# there's no dependency between any of the four legs, so leg selection
+# happens purely through which gate(s) get approved - approving only one
+# environment's gate runs only that environment's trio, in any order or
+# combination, and approving all four runs all four concurrently. See
+# source-control-workflow.yml's NOTE comments for the fire-and-forget/
+# 1-parallel-job rationale that originally motivated a similar two-leg
+# structure in an earlier version of this file - it no longer applies to the
+# Upgrade stages here (they run inline, not queued), but the
+# independent-legs approval structure it left behind is kept deliberately,
+# per the same reasoning: unrelated environments' approvals shouldn't block
+# each other.
 #
 # NOTE - Windows agents:
 # All steps use the `pwsh:` task (PowerShell 7+) rather than `bash:` - Windows
@@ -137,18 +137,19 @@ stages:
   # ------------------------------------------------------------------
   - stage: UatEnv1PreApproval
     displayName: 'UAT_Env_1 - Pre-Approval Gate'
-    # dependsOn: [] - this is the entry point to the UAT_Env_1 ->
-    # Pre_Prod_Env_1 -> Prod_Env_1 leg, open from the start of the run at the
-    # same time as ReleaseSourcePreApproval (see the two-leg design note at
-    # the top of this file). Runs sequentially internally once started.
+    # dependsOn: [] - this is its own independent leg, open from the start of
+    # the run at the same time as the other three environments' pre-approval
+    # gates (see the independent-legs design note at the top of this file).
     #
     # NOTE: an empty dependsOn is REQUIRED here, not optional. Azure DevOps
     # stages without an explicit dependsOn default to depending on the
     # immediately preceding stage IN THE YAML - not "no dependency" - so
-    # omitting this would silently chain this stage (and the whole UAT_Env_1
-    # leg) behind ReleaseSourcePostApproval, defeating the two-leg design
+    # omitting this would silently chain this stage behind
+    # ReleaseSourcePostApproval, defeating the independent-legs design
     # (confirmed the hard way: the ADO UI showed every stage running strictly
-    # left-to-right instead of the two legs opening in parallel).
+    # left-to-right instead of each leg opening in parallel). The same
+    # dependsOn: [] is repeated on PreProdEnv1PreApproval and
+    # ProdEnv1PreApproval below for the same reason.
     dependsOn: []
     jobs:
       - deployment: UatEnv1PreApprovalGate
@@ -205,8 +206,10 @@ stages:
   # ------------------------------------------------------------------
   - stage: PreProdEnv1PreApproval
     displayName: 'Pre_Prod_Env_1 - Pre-Approval Gate'
-    dependsOn: UatEnv1PostApproval
-    condition: succeeded()
+    # dependsOn: [] - independent leg, open from the start of the run same as
+    # the other three (see the UatEnv1PreApproval note above for why this
+    # can't just be omitted).
+    dependsOn: []
     jobs:
       - deployment: PreProdEnv1PreApprovalGate
         displayName: 'Await Pre_Prod_Env_1 pre-approval'
@@ -262,8 +265,10 @@ stages:
   # ------------------------------------------------------------------
   - stage: ProdEnv1PreApproval
     displayName: 'Prod_Env_1 - Pre-Approval Gate'
-    dependsOn: PreProdEnv1PostApproval
-    condition: succeeded()
+    # dependsOn: [] - independent leg, open from the start of the run same as
+    # the other three (see the UatEnv1PreApproval note above for why this
+    # can't just be omitted).
+    dependsOn: []
     jobs:
       - deployment: ProdEnv1PreApprovalGate
         displayName: 'Await Prod_Env_1 pre-approval'

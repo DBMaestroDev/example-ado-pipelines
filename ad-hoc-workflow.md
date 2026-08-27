@@ -61,24 +61,28 @@ The root-level `parameters:` block is what makes `packageName` a run-time input:
 
 ## 3. Stage-by-stage walkthrough
 
-The chain splits into two **independent** legs — Release Source, and a sequential 3-environment sub-chain covering UAT_Env_1, Pre_Prod_Env_1, and Prod_Env_1 — both open from the start of the run, rather than one running after the other. Environment selection happens purely through which leg's (first) pre-approval gate gets approved:
+The chain splits into **four fully independent legs** — one per environment (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1) — all open from the start of the run, rather than any of them waiting on another. Each leg is its own pre-approval → Upgrade → post-approval trio:
 
 - **Release Source leg:**
   1. **Release Source pre-approval gate** — Environment `Release-Source-pre-approval`.
   2. **Upgrade (Release Source)** — runs `java -jar DBmaestroAgent.jar -Upgrade -ProjectName "<dBmaestroProjectName>" -EnvName "Release Source" -PackageName "<packageName>" ...` inline on the runner.
   3. **Release Source post-approval gate** — Environment `Release-Source-post-approval`.
-- **UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 leg:** a sequential 3-environment sub-chain; each environment's own pre-approval → Upgrade → post-approval trio depends on the previous environment's post-approval gate:
-  1. **UAT_Env_1 pre-approval gate** — Environment `UAT_Env_1-pre-approval`. Open from the start of the run, same as Release Source's gate.
+- **UAT_Env_1 leg:**
+  1. **UAT_Env_1 pre-approval gate** — Environment `UAT_Env_1-pre-approval`.
   2. **Upgrade (UAT_Env_1)** — inline `-Upgrade -EnvName "UAT_Env_1"` call.
   3. **UAT_Env_1 post-approval gate** — Environment `UAT_Env_1-post-approval`.
-  4. **Pre_Prod_Env_1 pre-approval gate** — Environment `Pre_Prod_Env_1-pre-approval`. Depends on the UAT_Env_1 post-approval gate.
-  5. **Upgrade (Pre_Prod_Env_1)** — inline `-Upgrade -EnvName "Pre_Prod_Env_1"` call.
-  6. **Pre_Prod_Env_1 post-approval gate** — Environment `Pre_Prod_Env_1-post-approval`.
-  7. **Prod_Env_1 pre-approval gate** — Environment `Prod_Env_1-pre-approval`. Depends on the Pre_Prod_Env_1 post-approval gate.
-  8. **Upgrade (Prod_Env_1)** — inline `-Upgrade -EnvName "Prod_Env_1"` call.
-  9. **Prod_Env_1 post-approval gate** — Environment `Prod_Env_1-post-approval`. Final confirmation for that leg.
+- **Pre_Prod_Env_1 leg:**
+  1. **Pre_Prod_Env_1 pre-approval gate** — Environment `Pre_Prod_Env_1-pre-approval`.
+  2. **Upgrade (Pre_Prod_Env_1)** — inline `-Upgrade -EnvName "Pre_Prod_Env_1"` call.
+  3. **Pre_Prod_Env_1 post-approval gate** — Environment `Pre_Prod_Env_1-post-approval`.
+- **Prod_Env_1 leg:**
+  1. **Prod_Env_1 pre-approval gate** — Environment `Prod_Env_1-pre-approval`.
+  2. **Upgrade (Prod_Env_1)** — inline `-Upgrade -EnvName "Prod_Env_1"` call.
+  3. **Prod_Env_1 post-approval gate** — Environment `Prod_Env_1-post-approval`.
 
-Both legs' first pre-approval gates (Release Source and UAT_Env_1) are pending as soon as the run starts — there's nothing upstream of either of them to wait on. Approving only the Release Source gate runs only that leg; approving only the UAT_Env_1 gate runs the full UAT_Env_1 → Pre_Prod_Env_1 → Prod_Env_1 sub-chain in sequence (in either order relative to the other leg); approving both runs both legs concurrently. There is no `dependsOn` between the Release Source leg and the UAT_Env_1 leg.
+All four legs' pre-approval gates are pending as soon as the run starts — there's nothing upstream of any of them to wait on, and no `dependsOn` between any two legs. Approving only one environment's gate runs only that environment's trio; approving several runs each of them concurrently, in any combination or order. Nothing enforces promoting through environments in a particular sequence — that ordering, if you want one, is a human process decision (approve Release Source, confirm it, *then* approve UAT_Env_1, and so on), not something the pipeline itself gates.
+
+> **Implementation note — this requires an explicit `dependsOn: []` on each leg's pre-approval stage, not just omitting `dependsOn`.** Azure DevOps stages with no `dependsOn` at all default to depending on the *immediately preceding stage in the YAML file* — not "no dependency." Omitting it here would silently chain every leg behind whichever one is listed first, making the whole pipeline run strictly sequentially in the ADO UI (this was hit and fixed via a live run — the stage graph showed every stage left-to-right in file order instead of four parallel legs). Only `ReleaseSourcePreApproval`, being the first stage in the file, doesn't need this — it has no preceding stage to implicitly inherit.
 
 Every `Upgrade*` job runs the same inline-command shape:
 
@@ -91,13 +95,13 @@ java -jar "<agentJarPath>" -Upgrade `
   -AccessTokenFilePath "$(DBMAESTRO_ACCESS_TOKEN_FILE_PATH)"
 ```
 
-with `-EnvName` set to `"Release Source"`, `"UAT_Env_1"`, `"Pre_Prod_Env_1"`, or `"Prod_Env_1"` for the respective stage. It runs on the runner directly and waits for it to finish, so a non-zero exit code fails that stage (and everything depending on it) immediately — no separate pipeline is queued, and there's nothing to poll for.
+with `-EnvName` set to `"Release Source"`, `"UAT_Env_1"`, `"Pre_Prod_Env_1"`, or `"Prod_Env_1"` for the respective stage. It runs on the runner directly and waits for it to finish, so a non-zero exit code fails that stage (and its own leg's post-approval gate) immediately — no separate pipeline is queued, and there's nothing to poll for.
 
 Each leg's own approval gates follow the exact same manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md` for the general Environment/Approval-check setup; it isn't repeated here.
 
-### 3a. Closing out a run that only deploys one environment
+### 3a. Closing out a run that only deploys some environments
 
-Because the two legs are independent, a run where you only ever wanted, say, the Release Source leg will still have the UAT_Env_1 leg's pre-approval gate sitting there, pending, indefinitely — and, if that gate is later approved, the rest of that leg's chain through Pre_Prod_Env_1 and Prod_Env_1 pending behind it. This isn't a bug to fix in the YAML — it's inherent to how Azure DevOps evaluates multi-stage pipelines: a stage only becomes eligible to run once *every* stage it depends on has reached a terminal state (Succeeded, Failed, Skipped, or Rejected), and "awaiting manual approval" isn't terminal. There is no `condition:`/`dependsOn:` construct that lets the overall run finish while a sibling gate is neither approved, rejected, nor timed out — so an unused leg's gate has to be resolved one way or another before the run itself can close.
+Because all four legs are independent, a run where you only ever wanted, say, the Release Source leg will still have the other three environments' pre-approval gates sitting there, pending, indefinitely. This isn't a bug to fix in the YAML — it's inherent to how Azure DevOps evaluates multi-stage pipelines: a stage only becomes eligible to run once *every* stage it depends on has reached a terminal state (Succeeded, Failed, Skipped, or Rejected), and "awaiting manual approval" isn't terminal. There is no `condition:`/`dependsOn:` construct that lets the overall run finish while a sibling gate is neither approved, rejected, nor timed out — so every unused leg's gate has to be resolved one way or another before the run itself can close.
 
 Three ways to resolve it, none of which require a YAML change:
 
@@ -105,7 +109,7 @@ Three ways to resolve it, none of which require a YAML change:
 2. **Configure a timeout on that Environment's approval check.** Environments → the environment in question → "⋮" → Approvals and checks → edit the Approval check's timeout (e.g. 1 hour instead of the default). An un-acted-on gate then auto-rejects on its own instead of waiting indefinitely — useful if leaving a leg permanently unresolved becomes a recurring pattern rather than a one-off.
 3. **Cancel the whole run.** A blunter option if neither of the above fits — stops everything, including the leg that already succeeded, rather than resolving just the unused gate.
 
-**Caveat that applies to options 1 and 2 either way:** a rejected or timed-out approval counts as a *stage failure* in Azure DevOps' multi-stage YAML pipelines — there's no "partially succeeded" run outcome here. So a run where the Release Source leg deployed successfully and the UAT_Env_1 leg's gate was deliberately rejected will still show up in the Runs list, and in failure-notification emails (`README.md` section 9), as **Failed** overall. Anyone reviewing run status or failure notifications for this pipeline needs to check *which* stage actually failed before assuming something broke — a rejected/unused leg looks identical, at the run-result level, to a genuine failure.
+**Caveat that applies to options 1 and 2 either way:** a rejected or timed-out approval counts as a *stage failure* in Azure DevOps' multi-stage YAML pipelines — there's no "partially succeeded" run outcome here. So a run where the Release Source leg deployed successfully and one or more of the other three legs' gates were deliberately rejected will still show up in the Runs list, and in failure-notification emails (`README.md` section 9), as **Failed** overall. Anyone reviewing run status or failure notifications for this pipeline needs to check *which* stage(s) actually failed before assuming something broke — a rejected/unused leg looks identical, at the run-result level, to a genuine failure.
 
 No decision has been made yet on which of these three to standardize on; for now, resolve it however fits the situation.
 
@@ -130,10 +134,10 @@ No decision has been made yet on which of these three to standardize on; for now
 1. Trigger (or simulate) a DOP precheck completion for a package whose `TypeId` is 2 (Ad-hoc), so the hook script fires.
 2. Confirm the hook script's log (`hooks/logs/paradigm-hook_adhoc_test.log` by default — see section 4) shows `Is adhoc Package` and a successful `az pipelines run` call.
 3. Confirm `ad-hoc-workflow.yml` starts in ADO with the expected `packageName` (visible on the run's parameters).
-4. Confirm **both** the Release Source and UAT_Env_1 pre-approval gates are pending at the same time as soon as the run starts — this is the "both legs open in parallel" behavior.
-5. Approve only the Release Source pre-approval gate first, and confirm the UAT_Env_1 leg stays pending/untouched (its Upgrade and post-approval stages, and the downstream Pre_Prod_Env_1/Prod_Env_1 stages, haven't started) while the Release Source leg proceeds.
+4. Confirm **all four** pre-approval gates (Release Source, UAT_Env_1, Pre_Prod_Env_1, Prod_Env_1) are pending at the same time as soon as the run starts — this is the "four legs open in parallel" behavior, and the thing the `dependsOn: []` fix (section 3) exists to guarantee. If instead they appear one at a time, left-to-right, as each prior stage finishes, that's the missing-`dependsOn: []` regression — check every leg's pre-approval stage in the template.
+5. Approve only the Release Source pre-approval gate first, and confirm the other three legs stay pending/untouched (their Upgrade and post-approval stages haven't started) while the Release Source leg proceeds.
 6. Confirm the Upgrade (Release Source) stage's inline `java -jar ... -Upgrade` call succeeds, then approve Release Source post-approval.
-7. Approve the UAT_Env_1 pre-approval gate, confirm Upgrade (UAT_Env_1) succeeds, then approve UAT_Env_1 post-approval; repeat the same pre-approval → upgrade → post-approval pattern for Pre_Prod_Env_1 and then Prod_Env_1 to finish that leg.
+7. Approve each of the remaining three legs' pre-approval gates (together or one at a time, in any order) and confirm each one's Upgrade → post-approval pattern runs independently of the others.
 8. Separately, confirm a package with `TypeId` other than 2 does **not** cause the hook script to queue this pipeline at all.
 
 ## 6. Troubleshooting
@@ -146,5 +150,6 @@ No decision has been made yet on which of these three to standardize on; for now
 | The pipeline runs but upgrades the wrong package (or an empty one) | Check the `packageName=$DOP_PackageName` value in the hook script's `az pipelines run --parameters` call against `Versions[].Package.versionString` in the DOP JSON payload it read — and confirm the wrapper's `extends: parameters: packageName: ${{ parameters.packageName }}` line (section 2) wasn't changed to something else. |
 | `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/ad-hoc-workflow.yml` declares — compare the two side by side (section 2). |
 | `java : The term 'java' is not recognized...` | Java isn't installed on the agent, or isn't on the PATH the agent service sees — every inline `-Upgrade` step needs `java` to run `DBmaestroAgent.jar`. See `README.md` section 2. |
+| The four legs run strictly left-to-right in the ADO stage graph instead of opening in parallel | A `dependsOn: []` is missing from one of `UatEnv1PreApproval`, `PreProdEnv1PreApproval`, or `ProdEnv1PreApproval` in `azure-devops/templates/ad-hoc-workflow.yml`. Azure DevOps stages default to depending on the *previous stage in the YAML file* when `dependsOn` is omitted entirely — it does not default to "no dependency" — see the implementation note in section 3. |
 
 For setup issues not specific to this workflow (missing service connections, PowerShell/Java/Azure CLI on the agent, environment permissions, notification subscriptions), see the Troubleshooting section in `README.md`.

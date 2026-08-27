@@ -13,7 +13,8 @@
 # the chain itself happens once, in that one template - not copy-pasted here.
 #
 # See that template for the full approvals -> upgrades chain and its design
-# notes (two independent legs, inline `java -jar -Upgrade` calls, etc.)
+# notes (four independent legs, one per environment, inline
+# `java -jar -Upgrade` calls, etc.)
 
 trigger: none
 
