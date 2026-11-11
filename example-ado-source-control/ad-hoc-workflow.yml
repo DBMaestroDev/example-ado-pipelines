@@ -5,7 +5,7 @@
 # pipeline's YAML to live in the same repo whose pushes trigger it - though
 # this workflow is manual-trigger only now, the same "definition lives in the
 # calling repo" split is kept so all real logic still lives in exactly one
-# place: azure-devops/templates/ad-hoc-workflow.yml in the example-ado-pipelines
+# place: azure-devops/templates/ad-hoc-workflow.template.yml in the example-ado-pipelines
 # repo, `extends:`-ed below. That template is shared by every source-control
 # repo that needs this same ad-hoc upgrade chain - if there's more than one
 # source-control repo, each of the others gets an equally thin copy of this
@@ -41,7 +41,7 @@ resources:
       ref: refs/heads/main
 
 extends:
-  template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
+  template: azure-devops/templates/ad-hoc-workflow.template.yml@adoPipelines
   parameters:
     packageName: ${{ parameters.packageName }}
     dBmaestroProjectName: 'Example-ADO'

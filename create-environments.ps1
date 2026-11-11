@@ -1,4 +1,4 @@
-# Creates the 8 approval-gate environments and adds an Approval check (single
+# Creates the 5 approval-gate environments and adds an Approval check (single
 # approver) to each, via the ADO REST API directly (the azure-devops CLI
 # extension has no `environment` or `checks` command group).
 # Requires: az login (with an account that has permission in the org/project)
@@ -8,18 +8,14 @@ $ApproverId = "ea7b4fe7-32f3-6ee1-8cec-632b290acf75"  # nicolast@DBmaestro.com
 $AdoResource = "499b84ac-1321-427f-aa17-267ca6975798"
 
 $environments = @(
+    # Reused by both state-based-workflow.yml (its per-environment
+    # Pre-Approval gates) and ad-hoc-workflow.yml (its four independent legs).
     "Release-Source-pre-approval",
-    "Release-Source-post-approval",
     "UAT_Env_1-pre-approval",
-    "UAT_Env_1-post-approval",
     "Pre_Prod_Env_1-pre-approval",
-    "Pre_Prod_Env_1-post-approval",
     "Prod_Env_1-pre-approval",
-    "Prod_Env_1-post-approval",
-    # state-based-workflow.yml adds a Review Package gate only for
-    # Prod_Env_1; its Pre-Upgrade gate reuses the existing
-    # "<Env>-pre-approval" environments above instead of provisioning new
-    # ones.
+    # state-based-workflow.yml only: a second gate for Prod_Env_1, after the
+    # package is built and before the final upgrade.
     "Prod_Env_1-review-package"
 )
 

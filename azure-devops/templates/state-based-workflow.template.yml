@@ -1,9 +1,7 @@
 # Reusable "state-based release" pipeline template.
 # Version: 1.0.0
 #
-# How this differs from source-control-workflow.yml: that template builds
-# ONE package and reuses it across every environment. This one builds via
-# DBmaestro's *state-based* CustomBuild mode, which diffs the source commit
+# Builds via DBmaestro's *state-based* CustomBuild mode, which diffs the source commit
 # against each target environment's CURRENT LIVE STATE, so every environment
 # needs its own package. Hence N independent build-then-upgrade cycles - one
 # per environment - each with an inline `java -jar ... -CustomBuild` call
@@ -16,7 +14,7 @@
 # Each approval is an ADO Environment with a manual Approval check
 # (Pipelines -> Environments). Pre-approval gates reuse the same
 # "<Env>-pre-approval" environments already provisioned for
-# source-control-workflow.yml/ad-hoc-workflow.yml.
+# ad-hoc-workflow.yml.
 #
 # Package naming: "<7 char short commit hash>-<TargetEnvName>", e.g.
 # "50f5aac-Release-Source" - all packages from one run share the commit hash.

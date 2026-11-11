@@ -1,10 +1,10 @@
 # Ad-Hoc Workflow
 
-*Deep dive on `ad-hoc-workflow.yml` — the DBmaestro-DOP-hook-triggered, approval-gated upgrade chain for packages of the Ad-hoc type. Split out from `README.md` so this workflow's architecture, stages, and troubleshooting live in one place; see `README.md` for prerequisites and one-time ADO setup shared with [`source-control-workflow.yml`](./source-control-workflow.md).*
+*Deep dive on `ad-hoc-workflow.yml` — the DBmaestro-DOP-hook-triggered, approval-gated upgrade chain for packages of the Ad-hoc type. Split out from `README.md` so this workflow's architecture, stages, and troubleshooting live in one place; see `README.md` for prerequisites and one-time ADO setup shared with [`state-based-workflow.yml`](./state-based-workflow.md).*
 
 ## 1. What this is for, and how it differs from the main workflow
 
-Ad-hoc packages don't go through the TaskID/commit-message flow that `source-control-workflow.yml` builds around, and — unlike that workflow — this one doesn't build anything either: by the time it runs, the package already exists. `ad-hoc-workflow.yml` takes that already-built package's name as its one required input and upgrades every environment with it, behind the same approval gates used elsewhere in this repo.
+Ad-hoc packages don't go through the commit-triggered, per-environment build that `state-based-workflow.yml` builds around, and — unlike that workflow — this one doesn't build anything either: by the time it runs, the package already exists. `ad-hoc-workflow.yml` takes that already-built package's name as its one required input and upgrades every environment with it, behind the same approval gates used elsewhere in this repo.
 
 **Trigger: a DBmaestro DOP hook, not a git push.** This pipeline is `trigger: none` in Azure DevOps — nothing about pushing to `example-ado-source-control` starts it. It's queued externally instead, by a DBmaestro DOP hook script (see `hooks/paradigm-hook_adhoc_test.ps1`, invoked via `hooks/paradigm-hook.bat`):
 
@@ -14,22 +14,22 @@ Ad-hoc packages don't go through the TaskID/commit-message flow that `source-con
 
    **`--parameters`, not `--variables`:** `packageName` is declared as a run-time `parameters:` entry on the wrapper (section 2), not a pipeline variable — `az pipelines run` treats the two as distinct concepts with distinct flags, and passing it via `--variables` (e.g. as some earlier, unrelated build variable like `BuildPipeline.packagename`) fails to queue the run at all, with an error like `Could not queue the build because there were validation errors or warnings.`
 
-Because the trigger is conditional on package type and happens outside ADO entirely, there's no YAML `trigger:`/`paths:` filter to look at for "when does this run" the way there is for `source-control-workflow.yml` — the answer lives in the hook script's `TypeId` check.
+Because the trigger is conditional on package type and happens outside ADO entirely, there's no YAML `trigger:`/`paths:` filter to look at for "when does this run" the way there is for `state-based-workflow.yml` — the answer lives in the hook script's `TypeId` check.
 
-The other differences from `source-control-workflow.yml` all follow from there being no TaskID and no build step here:
+The other differences from `state-based-workflow.yml` all follow from there being no build step here:
 
-- **No commit message convention, no build stage.** The package this workflow upgrades already exists by the time DOP's hook queues this pipeline — there is nothing for this workflow to build or detect.
-- **Package name comes from the hook's DOP payload, not a parameter you type by hand.** The `packageName` value the hook script extracts and forwards *is* this pipeline's `packageName` parameter — anywhere `source-control-workflow.yml` uses an extracted TaskID as `packageName`, this workflow uses what the hook passed via `--parameters packageName=...`.
-- **Pre-approval gates are reused, not duplicated.** The same four `<Env>-pre-approval` environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, `Pre_Prod_Env_1-pre-approval`, `Prod_Env_1-pre-approval`) also back `source-control-workflow.yml`'s pre-approval gates for the same environments — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and TaskID-based releases ever need independently tracked approvals; nothing about the current design blocks that.
-- **Upgrades run inline, not via a queued downstream pipeline.** Each `Upgrade*` stage calls `DBmaestroAgent.jar -Upgrade` directly on the runner and waits for it to finish, so its own exit code gates anything downstream — see `state-based-workflow.yml` for the same inline-command pattern used there.
-- **No post-approval gate.** Unlike `source-control-workflow.yml`, this workflow doesn't ask for a second manual confirmation after each upgrade — the inline `-Upgrade` step's own exit code already gates the run, so a human re-confirming the same pass/fail result would be redundant. Each leg is just pre-approval → Upgrade, full stop.
+- **No build stage.** The package this workflow upgrades already exists by the time DOP's hook queues this pipeline — there is nothing for this workflow to build or detect.
+- **Package name comes from the hook's DOP payload, not a parameter you type by hand.** The `packageName` value the hook script extracts and forwards *is* this pipeline's `packageName` parameter — where `state-based-workflow.yml` builds its own package per environment, this workflow uses whatever package name the hook passed via `--parameters packageName=...`.
+- **Pre-approval gates are reused, not duplicated.** The same four `<Env>-pre-approval` environments (`Release-Source-pre-approval`, `UAT_Env_1-pre-approval`, `Pre_Prod_Env_1-pre-approval`, `Prod_Env_1-pre-approval`) also back `state-based-workflow.yml`'s pre-approval gates for the same environments — same approvers, same "is it OK to touch this environment" decision either way. Split them into separate environments later if ad-hoc and push-triggered releases ever need independently tracked approvals; nothing about the current design blocks that.
+- **Upgrades run inline, not via a queued downstream pipeline.** Each `Upgrade*` stage calls `DBmaestroAgent.jar -Upgrade` directly on the runner and waits for it to finish, so its own exit code gates anything downstream — see `state-based-workflow.template.yml` for the same inline-command pattern used there.
+- **No review/post-approval gate.** Unlike `state-based-workflow.yml`'s extra Prod_Env_1 review-package gate, this workflow doesn't ask for a second manual confirmation after each upgrade — the inline `-Upgrade` step's own exit code already gates the run, so a human re-confirming the same pass/fail result would be redundant. Each leg is just pre-approval → Upgrade, full stop.
 
 ## 2. Architecture: a thin trigger file, and a shared template
 
-Same reasoning as `source-control-workflow.yml` (see that doc's section 2): even though this pipeline is queued externally rather than self-triggered by a push, Azure DevOps still requires a pipeline's own YAML definition to be registered from a file living in one of its repos — so a thin file exists per source-control repo, while the actual chain lives once in this `example-ado-pipelines` repo:
+Same reasoning as `state-based-workflow.yml` (see that doc's section 2): even though this pipeline is queued externally rather than self-triggered by a push, Azure DevOps still requires a pipeline's own YAML definition to be registered from a file living in one of its repos — so a thin file exists per source-control repo, while the actual chain lives once in this `example-ado-pipelines` repo:
 
 - **`example-ado-source-control/ad-hoc-workflow.yml`** — the thin wrapper. [View it](./example-ado-source-control/ad-hoc-workflow.yml).
-- **`example-ado-pipelines/azure-devops/templates/ad-hoc-workflow.yml`** — the real pipeline. [View it](./azure-devops/templates/ad-hoc-workflow.yml).
+- **`example-ado-pipelines/azure-devops/templates/ad-hoc-workflow.template.yml`** — the real pipeline. [View it](./azure-devops/templates/ad-hoc-workflow.template.yml).
 
 ```yaml
 # example-ado-source-control/ad-hoc-workflow.yml (abridged)
@@ -49,7 +49,7 @@ resources:
       ref: refs/heads/main
 
 extends:
-  template: azure-devops/templates/ad-hoc-workflow.yml@adoPipelines
+  template: azure-devops/templates/ad-hoc-workflow.template.yml@adoPipelines
   parameters:
     packageName: ${{ parameters.packageName }}
     dBmaestroProjectName: 'Example-ADO'
@@ -58,7 +58,7 @@ extends:
 
 The root-level `parameters:` block is what makes `packageName` a run-time input: it shows up as an editable field in ADO's "Run pipeline" dialog, and — same value — is exactly what the DOP hook script supplies via `az pipelines run --parameters "packageName=<value>"` when it queues this pipeline for you. `${{ parameters.packageName }}` in the `extends:` block forwards whatever value the run was queued with straight down into the template's own `packageName` parameter.
 
-**Setup note:** as with `source-control-workflow.yml`, `DBMaestroDev` above is just this guide's own example deployment — in your setup, both `example-ado-pipelines` and `example-ado-source-control` live in **your own** GitHub org. The `adoPipelines` resource can reuse the same GitHub service connection already required for `example-ado-source-control`, provided that connection is scoped to `example-ado-pipelines` too.
+**Setup note:** as with `state-based-workflow.yml`, `DBMaestroDev` above is just this guide's own example deployment — in your setup, both `example-ado-pipelines` and `example-ado-source-control` live in **your own** GitHub org. The `adoPipelines` resource can reuse the same GitHub service connection already required for `example-ado-source-control`, provided that connection is scoped to `example-ado-pipelines` too.
 
 ## 3. Stage-by-stage walkthrough
 
@@ -94,7 +94,7 @@ java -jar "<agentJarPath>" -Upgrade `
 
 with `-EnvName` set to `"Release Source"`, `"UAT_Env_1"`, `"Pre_Prod_Env_1"`, or `"Prod_Env_1"` for the respective stage. It runs on the runner directly and waits for it to finish, so a non-zero exit code fails that stage immediately — no separate pipeline is queued, and there's nothing to poll for. Since that stage is also the last stage in its leg, a failed upgrade is the run's own signal that something went wrong — there's no separate post-approval gate to also reject.
 
-Each leg's own pre-approval gate follows the exact same manual-approval-check setup as `source-control-workflow.yml` — see that doc and `README.md` for the general Environment/Approval-check setup; it isn't repeated here.
+Each leg's own pre-approval gate follows the exact same manual-approval-check setup as `state-based-workflow.yml` — see that doc and `README.md` for the general Environment/Approval-check setup; it isn't repeated here.
 
 ### 3a. Closing out a run that only deploys some environments
 
@@ -145,8 +145,8 @@ No decision has been made yet on which of these three to standardize on; for now
 | Hook script logs a successful `az pipelines run`, but nothing shows up in ADO | Confirm `$adhocPipelineName`, `--org`, and `--project` in the hook script match this pipeline's actual name/org/project in ADO exactly — a mismatch fails the `az pipelines run` call itself, which the script does check for (`$LASTEXITCODE`), but double-check the logged output for the specific error. |
 | `ERROR: Could not queue the build because there were validation errors or warnings.` | The hook script passed `packageName` via `--variables` instead of `--parameters` (or under the wrong name) — `packageName` is a run-time template parameter, not a pipeline variable; see section 4's `--parameters`/`--variables` note. Confirm the hook script's `az pipelines run` call uses `--parameters "packageName=$DOP_PackageName"` exactly. |
 | The pipeline runs but upgrades the wrong package (or an empty one) | Check the `packageName=$DOP_PackageName` value in the hook script's `az pipelines run --parameters` call against `Versions[].Package.versionString` in the DOP JSON payload it read — and confirm the wrapper's `extends: parameters: packageName: ${{ parameters.packageName }}` line (section 2) wasn't changed to something else. |
-| `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/ad-hoc-workflow.yml` declares — compare the two side by side (section 2). |
+| `extends` template not found, or parameters rejected as unexpected | The `adoPipelines` resource doesn't resolve, or a parameter name/spelling in the wrapper's `extends: parameters:` block doesn't match what `azure-devops/templates/ad-hoc-workflow.template.yml` declares — compare the two side by side (section 2). |
 | `java : The term 'java' is not recognized...` | Java isn't installed on the agent, or isn't on the PATH the agent service sees — every inline `-Upgrade` step needs `java` to run `DBmaestroAgent.jar`. See `README.md` section 2. |
-| The four legs run strictly left-to-right in the ADO stage graph instead of opening in parallel | A `dependsOn: []` is missing from one of `UatEnv1PreApproval`, `PreProdEnv1PreApproval`, or `ProdEnv1PreApproval` in `azure-devops/templates/ad-hoc-workflow.yml`. Azure DevOps stages default to depending on the *previous stage in the YAML file* when `dependsOn` is omitted entirely — it does not default to "no dependency" — see the implementation note in section 3. |
+| The four legs run strictly left-to-right in the ADO stage graph instead of opening in parallel | A `dependsOn: []` is missing from one of `UatEnv1PreApproval`, `PreProdEnv1PreApproval`, or `ProdEnv1PreApproval` in `azure-devops/templates/ad-hoc-workflow.template.yml`. Azure DevOps stages default to depending on the *previous stage in the YAML file* when `dependsOn` is omitted entirely — it does not default to "no dependency" — see the implementation note in section 3. |
 
 For setup issues not specific to this workflow (missing service connections, PowerShell/Java/Azure CLI on the agent, environment permissions, notification subscriptions), see the Troubleshooting section in `README.md`.
